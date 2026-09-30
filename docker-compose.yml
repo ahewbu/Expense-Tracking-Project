@@ -1,0 +1,38 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: glenzhik_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: glenzhik
+      POSTGRES_PASSWORD: glenzhik_secret
+      POSTGRES_DB: glenzhik
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U glenzhik -d glenzhik"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: glenzhik_api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://glenzhik:glenzhik_secret@db:5432/glenzhik
+      ENV: development
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
