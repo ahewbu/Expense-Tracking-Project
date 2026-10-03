@@ -1,5 +1,4 @@
-# app/api/v1/transactions.py
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status
 from typing import List
 from uuid import UUID
 from app.schemas.transaction import (
@@ -13,6 +12,7 @@ from app.schemas.transaction import (
 )
 
 router = APIRouter(prefix="/transactions", tags=["Transactions"])
+
 
 @router.post(
     "/parse",
@@ -43,6 +43,7 @@ async def parse_transaction(payload: TransactionParseRequest):
         detail="LLM integration not yet implemented"
     )
 
+
 @router.post(
     "/",
     response_model=TransactionResponse,
@@ -58,6 +59,7 @@ async def create_transaction(transaction: TransactionCreate):
         detail="DB integration not yet implemented"
     )
 
+
 @router.get(
     "/",
     response_model=List[TransactionResponse],
@@ -68,6 +70,7 @@ async def get_transactions(skip: int = 0, limit: int = 100):
     """Возвращает список транзакций."""
     # TODO: здесь будет запрос к БД
     return []
+
 
 @router.patch(
     "/{transaction_id}",
@@ -83,6 +86,7 @@ async def update_transaction(transaction_id: UUID, payload: TransactionUpdate):
         detail="Transaction not found"
     )
 
+
 @router.delete(
     "/{transaction_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -93,6 +97,7 @@ async def delete_transaction(transaction_id: UUID):
     """Удаляет транзакцию."""
     # TODO: здесь будет удаление из БД
     return None
+
 
 @router.get(
     "/categories",
