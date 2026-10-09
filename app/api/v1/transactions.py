@@ -37,11 +37,20 @@ async def parse_transaction(payload: TransactionParseRequest):
     }
     ```
     """
-    # TODO: здесь будет вызов llm_service.parse_with_gigachat(payload.text)
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="LLM integration not yet implemented"
-    )
+    try:
+        from app.services.llm_adapter import parse_expense_text
+        result = await parse_expense_text(payload.text)
+        return result
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при вызове LLM: {str(e)}"
+        )
 
 
 @router.post(
