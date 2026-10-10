@@ -62,7 +62,6 @@ async def parse_expense_text(text: str) -> TransactionParseResponse:
 
     # 3. Получаем токен
     token = await get_gigachat_token()
-    print("!!! УСПЕХ: ТОКЕН ПОЛУЧЕН, ОТПРАВЛЯЕМ ЗАПРОС В GIGACHAT !!!") # <--- ДОБАВИТЬ ЭТУ СТРОКУ
 
     # 4. Формируем запрос к GigaChat
     headers = {

@@ -16,6 +16,7 @@ from app.schemas.transaction import (
     CategoryResponse,
     CategoryCreate,
 )
+from app.services.llm_adapter import parse_expense_text
 
 router = APIRouter(prefix="/transactions", tags=["Transactions"])
 
@@ -33,6 +34,32 @@ def get_or_create_test_user(db: Session) -> User:
         db.commit()
         db.refresh(user)
     return user
+
+# === ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: Найти или создать категорию по названию ===
+def get_or_create_category_by_name(db: Session, category_name: str, user_id: UUID) -> Category:
+    """
+    Находит категорию по названию для пользователя.
+    Если не найдена — создаёт новую.
+    Возвращает объект Category с UUID.
+    """
+    # Ищем категорию по названию и user_id
+    category = db.query(Category).filter(
+        Category.name == category_name,
+        Category.user_id == user_id
+    ).first()
+    
+    # Если не нашли — создаём
+    if not category:
+        category = Category(
+            user_id=user_id,
+            name=category_name,
+            icon=""  # Пустая иконка по умолчанию
+        )
+        db.add(category)
+        db.commit()
+        db.refresh(category)
+    
+    return category
 
 
 # === ЭНДПОИНТ 1: Парсинг текста через LLM ===
@@ -64,6 +91,80 @@ async def parse_transaction(payload: TransactionParseRequest):
             detail=f"Ошибка при вызове LLM: {str(e)}"
         )
 
+# === ЭНДПОИНТ: Сквозной процесс (парсинг + сохранение) ===
+@router.post(
+    "/parse-and-save",
+    response_model=TransactionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Распарсить текст и сохранить транзакцию",
+    description="Принимает текст, парсит через LLM, маппит категорию и сохраняет транзакцию в БД. Возвращает готовую транзакцию."
+)
+async def parse_and_save_transaction(
+    payload: TransactionParseRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Сквозной процесс:
+    1. Парсит текст через LLM
+    2. Находит/создаёт категорию по названию
+    3. Сохраняет транзакцию в БД
+    4. Возвращает TransactionResponse
+    """
+    try:
+        # 1. Получаем или создаём тестового пользователя
+        user = get_or_create_test_user(db)
+        
+        # 2. Вызываем LLM-адаптер для парсинга текста
+        parsed_data = await parse_expense_text(payload.text)
+        
+        # 3. Маппим категорию из строки в UUID (находим или создаём)
+        category = get_or_create_category_by_name(db, parsed_data.category.value, user.id)
+        
+        # 4. Обрабатываем дату (преобразуем строку в datetime)
+        transaction_date = datetime.now()  # По умолчанию — текущая дата
+        if parsed_data.date:
+            try:
+                # Парсим строку "YYYY-MM-DD" в datetime
+                parsed_date = datetime.strptime(parsed_data.date, "%Y-%m-%d")
+                transaction_date = parsed_date.replace(tzinfo=transaction_date.tzinfo)
+            except ValueError:
+                # Если не удалось распарсить — используем текущую дату
+                pass
+        
+        # 5. Обрабатываем сумму (если LLM вернул null — устанавливаем 0)
+        amount = parsed_data.amount if parsed_data.amount is not None else 0.0
+        
+        # 6. Создаём транзакцию в БД
+        new_transaction = Transaction(
+            user_id=user.id,
+            amount=amount,
+            currency="RUB",
+            category_id=category.id,
+            description=parsed_data.description,
+            source="llm",
+            transaction_date=transaction_date,
+            status="pending"
+        )
+        
+        db.add(new_transaction)
+        db.commit()
+        db.refresh(new_transaction)
+        
+        # 7. Возвращаем результат
+        return new_transaction
+    
+    except ValueError as e:
+        # Ошибка парсинга JSON от LLM
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Ошибка парсинга: {str(e)}"
+        )
+    except Exception as e:
+        # Любая другая ошибка
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при создании транзакции: {str(e)}"
+        )
 
 # === ЭНДПОИНТ 2: Создать транзакцию ===
 @router.post(
