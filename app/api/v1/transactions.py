@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Query
 from sqlalchemy.orm import Session
-from typing import List
+from sqlalchemy import desc
+from typing import List, Optional
 from uuid import UUID
 from datetime import datetime
 
@@ -34,7 +35,7 @@ def get_or_create_test_user(db: Session) -> User:
     return user
 
 
-# === ЭНДПОИНТ 1: Парсинг текста через LLM (УЖЕ РАБОТАЕТ) ===
+# === ЭНДПОИНТ 1: Парсинг текста через LLM ===
 @router.post(
     "/parse",
     response_model=TransactionParseResponse,
@@ -104,24 +105,51 @@ async def create_transaction(
     return new_transaction
 
 
-# === ЭНДПОИНТ 3: Получить список транзакций ===
+# === ЭНДПОИНТ 3: Получить список транзакций (ЗАДАНИЕ 7.1) ===
 @router.get(
     "/",
     response_model=List[TransactionResponse],
     summary="Получить список транзакций",
-    description="Возвращает список транзакций пользователя с пагинацией."
+    description="Возвращает список транзакций пользователя с пагинацией и фильтрацией."
 )
 async def get_transactions(
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0, description="Количество пропускаемых записей (offset)"),
+    limit: int = Query(100, ge=1, le=1000, description="Максимальное количество записей"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Фильтр по статусу: pending, confirmed, rejected"),
     db: Session = Depends(get_db)
 ):
-    """Возвращает список транзакций."""
-    transactions = db.query(Transaction).offset(skip).limit(limit).all()
+    """
+    Возвращает список транзакций с пагинацией и фильтрацией.
+    
+    Параметры:
+    - skip: количество пропускаемых записей (для пагинации)
+    - limit: максимальное количество записей (1-1000)
+    - status: фильтр по статусу (pending, confirmed, rejected)
+    
+    Сортировка: по transaction_date DESC (новые сначала)
+    """
+    # Базовый запрос
+    query = db.query(Transaction)
+    
+    # Фильтрация по статусу, если передан
+    if status_filter:
+        if status_filter not in ["pending", "confirmed", "rejected"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Статус должен быть одним из: pending, confirmed, rejected"
+            )
+        query = query.filter(Transaction.status == status_filter)
+    
+    # Сортировка по transaction_date DESC (новые сначала)
+    query = query.order_by(desc(Transaction.transaction_date))
+    
+    # Пагинация
+    transactions = query.offset(skip).limit(limit).all()
+    
     return transactions
 
 
-# === ЭНДПОИНТ 4: Обновить транзакцию ===
+# === ЭНДПОИНТ 4: Обновить транзакцию (ЗАДАНИЕ 7.2) ===
 @router.patch(
     "/{transaction_id}",
     response_model=TransactionResponse,
@@ -133,7 +161,12 @@ async def update_transaction(
     payload: TransactionUpdate,
     db: Session = Depends(get_db)
 ):
-    """Обновляет транзакцию по ID."""
+    """
+    Обновляет транзакцию по ID.
+    
+    Если status меняется на 'confirmed' — проверяет обязательные поля (amount, category_id).
+    """
+    # Находим транзакцию
     transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
     if not transaction:
         raise HTTPException(
@@ -141,6 +174,20 @@ async def update_transaction(
             detail="Транзакция не найдена"
         )
     
+    # Если статус меняется на confirmed — проверяем обязательные поля
+    if payload.status == "confirmed":
+        if not transaction.amount or transaction.amount <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Для подтверждения транзакции поле amount обязательно"
+            )
+        if not transaction.category_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Для подтверждения транзакции поле category_id обязательно"
+            )
+    
+    # Обновляем только переданные поля
     update_data = payload.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(transaction, field, value)
@@ -192,7 +239,7 @@ async def get_categories(db: Session = Depends(get_db)):
     if not categories:
         standard_categories = [
             {"name": "Еда", "icon": ""},
-            {"name": "Транспорт", "icon": "🚗"},
+            {"name": "Транспорт", "icon": ""},
             {"name": "Жилье", "icon": ""},
             {"name": "Развлечения", "icon": "🎬"},
             {"name": "Здоровье", "icon": ""},
