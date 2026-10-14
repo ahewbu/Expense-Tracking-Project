@@ -9,14 +9,9 @@ export default function RootLayout() {
         headerTitleStyle: { fontWeight: '600' },
       }}
     >
-      <Stack.Screen 
-        name="index" 
-        options={{ title: 'Мои расходы' }}
-      />
-      <Stack.Screen 
-        name="add-expense" 
-        options={{ title: 'Новая трата' }}
-      />
+      <Stack.Screen name="index" options={{ title: 'Главная' }} />
+      <Stack.Screen name="add-expense" options={{ title: 'Новая трата' }} />
+      <Stack.Screen name="confirm" options={{ title: 'Подтверждение' }} />
     </Stack>
   );
 }

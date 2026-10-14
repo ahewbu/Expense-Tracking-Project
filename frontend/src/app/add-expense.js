@@ -1,36 +1,45 @@
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { createTransaction } from '../mocks/transactions';
 
 export default function AddExpenseScreen() {
   const [text, setText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [result, setResult] = useState(null); // Для отображения результата
 
   const handleAdd = async () => {
     if (!text.trim()) {
-      console.log('Ошибка: текст пустой');
       return;
     }
     
     setIsLoading(true);
-    console.log('Начинаем добавление:', text);
     
     try {
-      const newTransaction = await createTransaction(text);
-      console.log('Результат:', newTransaction);
+      // Имитируем парсинг ИИ, но НЕ сохраняем в mock
+      const amountMatch = text.match(/\d+/);
+      const amount = amountMatch ? parseInt(amountMatch[0]) : 0;
       
-      setResult(newTransaction); // Показываем результат на экране
+      const parsedData = {
+        id: String(Date.now()), // временный ID
+        text: text,
+        amount: amount,
+        category: 'Другое',
+        date: new Date().toISOString().split('T')[0],
+      };
       
-      // Ждем 1.5 секунды и возвращаемся на главный экран
-      setTimeout(() => {
-        router.push('/');
-      }, 1500);
+      // Переход на экран подтверждения с параметрами
+      router.push({
+        pathname: '/confirm',
+        params: {
+          id: parsedData.id,
+          amount: String(parsedData.amount),
+          category: parsedData.category,
+          date: parsedData.date,
+          description: parsedData.text,
+        },
+      });
       
     } catch (e) {
-      console.log('Ошибка:', e);
-      setResult({ error: 'Не удалось добавить расход' });
+      alert('Не удалось распознать расход');
     } finally {
       setIsLoading(false);
     }
@@ -39,7 +48,7 @@ export default function AddExpenseScreen() {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.label}>Опишите трату</Text>
-      <Text style={styles.hint}>Например: "кофе 350 рублей"</Text>
+      <Text style={styles.hint}>Например: "кофе 350 рублей" или "обед 800"</Text>
       
       <TextInput
         style={styles.input}
@@ -49,6 +58,7 @@ export default function AddExpenseScreen() {
         onChangeText={setText}
         multiline
         numberOfLines={3}
+        textAlignVertical="top"
       />
       
       <TouchableOpacity 
@@ -60,22 +70,6 @@ export default function AddExpenseScreen() {
           {isLoading ? 'ИИ думает...' : 'Добавить'}
         </Text>
       </TouchableOpacity>
-
-      {/* Отображение результата */}
-      {result && (
-        <View style={styles.resultCard}>
-          {result.error ? (
-            <Text style={styles.resultError}>{result.error}</Text>
-          ) : (
-            <>
-              <Text style={styles.resultTitle}>✅ Расход добавлен!</Text>
-              <Text style={styles.resultText}>Сумма: {result.amount} ₽</Text>
-              <Text style={styles.resultText}>Категория: {result.category}</Text>
-              <Text style={styles.resultHint}>Возврат на главный экран...</Text>
-            </>
-          )}
-        </View>
-      )}
     </ScrollView>
   );
 }
@@ -85,13 +79,18 @@ const styles = StyleSheet.create({
   content: { padding: 20, paddingTop: 60, flexGrow: 1 },
   label: { fontSize: 20, fontWeight: '600', color: '#1C1917', marginBottom: 8 },
   hint: { fontSize: 14, color: '#57534E', marginBottom: 20 },
-  input: { backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E7E5E4', borderRadius: 16, padding: 16, fontSize: 16, color: '#1C1917', minHeight: 100, marginBottom: 24 },
+  input: { 
+    backgroundColor: '#FFF', 
+    borderWidth: 1, 
+    borderColor: '#E7E5E4', 
+    borderRadius: 16, 
+    padding: 16, 
+    fontSize: 16, 
+    color: '#1C1917', 
+    minHeight: 100, 
+    marginBottom: 24 
+  },
   button: { backgroundColor: '#6366F1', borderRadius: 16, padding: 18, alignItems: 'center' },
   buttonDisabled: { opacity: 0.6 },
   buttonText: { color: '#FFF', fontSize: 16, fontWeight: '600' },
-  resultCard: { marginTop: 24, padding: 16, backgroundColor: '#EEF2FF', borderRadius: 16, borderWidth: 1, borderColor: '#6366F1' },
-  resultTitle: { fontSize: 18, fontWeight: '600', color: '#6366F1', marginBottom: 8 },
-  resultText: { fontSize: 16, color: '#1C1917', marginBottom: 4 },
-  resultError: { fontSize: 16, color: '#EF4444', fontWeight: '500' },
-  resultHint: { fontSize: 14, color: '#A8A29E', marginTop: 8, fontStyle: 'italic' },
 });

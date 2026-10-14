@@ -1,0 +1,20 @@
+# Игнорируем системные папки Git (главная причина ошибки!)
+.git
+.gitignore
+
+# Игнорируем фронтенд и его зависимости
+frontend
+node_modules
+
+# Игнорируем кэш и временные файлы
+.expo
+dist
+__pycache__
+*.pyc
+.venv
+venv
+.env
+.env.*
+*.md
+.DS_Store
+Thumbs.db

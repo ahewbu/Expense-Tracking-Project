@@ -6,7 +6,7 @@ let mockTransactions = [
     text: 'Купил кофе',
     amount: 350,
     category: 'Кафе',
-    date: '2026-10-08',
+    date: '2026-10-14',
     time: '09:15',
   },
   {
@@ -14,41 +14,28 @@ let mockTransactions = [
     text: 'Продукты в Пятёрочке',
     amount: 1250,
     category: 'Продукты',
-    date: '2026-10-07',
+    date: '2026-10-13',
     time: '18:30',
-  },
-  {
-    id: '3',
-    text: 'Такси до дома',
-    amount: 450,
-    category: 'Транспорт',
-    date: '2026-10-07',
-    time: '22:10',
   },
 ];
 
-let nextId = 4;
+let nextId = 3;
 
 export const getTransactions = () => {
   return new Promise((resolve) => {
-    setTimeout(() => {
-      resolve([...mockTransactions]);
-    }, 300);
+    setTimeout(() => resolve([...mockTransactions]), 300);
   });
 };
 
-export const createTransaction = (text) => {
+export const createTransaction = (data) => {
   return new Promise((resolve) => {
     setTimeout(() => {
-      const amountMatch = text.match(/\d+/);
-      const amount = amountMatch ? parseInt(amountMatch[0]) : 0;
-      
       const newTransaction = {
-        id: String(nextId++),
-        text: text,
-        amount: amount,
-        category: 'Другое',
-        date: new Date().toISOString().split('T')[0],
+        id: data.id || String(nextId++),
+        text: data.text || data.description,
+        amount: data.amount || 0,
+        category: data.category || 'Другое',
+        date: data.date || new Date().toISOString().split('T')[0],
         time: new Date().toTimeString().slice(0, 5),
       };
       
