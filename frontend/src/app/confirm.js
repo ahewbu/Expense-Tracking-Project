@@ -1,28 +1,76 @@
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
-import { useState } from 'react';
-import { createTransaction } from '../mocks/transactions';
-
-const CATEGORIES = ['Кафе', 'Продукты', 'Транспорт', 'Развлечения', 'Другое'];
+import { useState, useEffect, useRef } from 'react';
+import { createTransaction, updateTransaction, getCategories, createCategory } from '../api/transactions';
+import { confirmStyles as styles } from '../styles/confirmStyles';
+import CategoryButton from '../components/CategoryButton';
+import { sortCategories } from '../utils/categories';
 
 export default function ConfirmScreen() {
   const params = useLocalSearchParams();
-  
-  console.log('=== ConfirmScreen loaded ===');
-  console.log('Params:', params);
-  
-  const [amount, setAmount] = useState(params.amount || '0');
-  const [category, setCategory] = useState(params.category || 'Другое');
-  const [date, setDate] = useState(params.date || new Date().toISOString().split('T')[0]);
-  const [description, setDescription] = useState(params.description || 'Без описания');
+
+  const [amount, setAmount] = useState('0');
+  const [category, setCategory] = useState('');
+  const [date, setDate] = useState('');
+  const [description, setDescription] = useState('');
   const [isEditing, setIsEditing] = useState(false);
+  const [isParsing, setIsParsing] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [categories, setCategories] = useState([]);
+  const [currentTransaction, setCurrentTransaction] = useState(null);
+  
+  const parsedRef = useRef(false);
+
+  // 1. Загружаем категории при монтировании
+  // 1. Загружаем категории при монтировании (и сортируем)
+  useEffect(() => {
+    getCategories()
+      .then((data) => setCategories(sortCategories(data))) // <-- Сортируем
+      .catch((e) => console.error('Ошибка загрузки категорий:', e));
+  }, []);
+  
+  // 2. Парсим текст через ИИ СРАЗУ при открытии экрана (только 1 раз!)
+  useEffect(() => {
+    if (parsedRef.current) return;
+    
+    const rawText = params.text || params.description || '';
+    if (!rawText.trim()) {
+      console.error('Пустой текст для парсинга');
+      setIsParsing(false);
+      return;
+    }
+
+    parsedRef.current = true;
+
+    createTransaction(rawText)
+      .then((result) => {
+        console.log('ИИ распознал и создал черновик:', result);
+        setCurrentTransaction(result);
+        setAmount(String(result.amount));
+        setDescription(result.description || '');
+        setDate(result.transaction_date ? result.transaction_date.split('T')[0] : '');
+      })
+      .catch((e) => {
+        console.error('Ошибка парсинга:', e);
+        alert('Не удалось распознать трату');
+      })
+      .finally(() => setIsParsing(false));
+  }, []);
+
+  // 3. Подставляем имя категории, когда всё загрузилось
+  useEffect(() => {
+    if (currentTransaction && categories.length > 0) {
+      const cat = categories.find((c) => c.id === currentTransaction.category_id);
+      if (cat) setCategory(cat.name);
+    }
+  }, [categories, currentTransaction]);
 
   const validate = () => {
     if (isNaN(amount) || parseFloat(amount) <= 0) {
       alert('Ошибка: Сумма должна быть больше 0');
       return false;
     }
-    const today = new Date().toISOString().split('T')[0]; // "2026-10-14" в локальном времени
+    const today = new Date().toISOString().split('T')[0];
     if (date > today) {
       alert('Ошибка: Дата не может быть в будущем');
       return false;
@@ -31,54 +79,61 @@ export default function ConfirmScreen() {
   };
 
   const handleSaveEdit = () => {
-    console.log('handleSaveEdit called');
     if (validate()) {
       setIsEditing(false);
-      console.log('Edit saved');
     }
   };
 
   const handleCancelEdit = () => {
-    console.log('handleCancelEdit called');
-    setAmount(params.amount || '0');
-    setCategory(params.category || 'Другое');
-    setDate(params.date || new Date().toISOString().split('T')[0]);
-    setDescription(params.description || 'Без описания');
+    if (currentTransaction) {
+      setAmount(String(currentTransaction.amount));
+      setDescription(currentTransaction.description || '');
+      setDate(currentTransaction.transaction_date ? currentTransaction.transaction_date.split('T')[0] : '');
+      const cat = categories.find((c) => c.id === currentTransaction.category_id);
+      if (cat) setCategory(cat.name);
+    }
     setIsEditing(false);
   };
 
   const handleConfirm = async () => {
-    console.log('handleConfirm called');
-    if (!validate()) {
-      console.log('Validation failed');
-      return;
-    }
+    if (!validate() || !currentTransaction || isSaving) return;
 
+    setIsSaving(true);
     try {
-      console.log('Creating transaction with data:', {
-        id: params.id,
-        text: description,
+      let categoryUuid = categories.find((c) => c.name === category)?.id;
+      if (!categoryUuid) {
+        const newCat = await createCategory({ name: category, icon: '' });
+        categoryUuid = newCat.id;
+        setCategories((prev) => [...prev, newCat]);
+      }
+
+      await updateTransaction(currentTransaction.id, {
         amount: parseFloat(amount),
-        category: category,
-        date: date,
+        category_id: categoryUuid,
+        description: description,
+        transaction_date: date,
+        status: 'confirmed',
       });
-      
-      await createTransaction({
-        id: params.id || String(Date.now()),
-        text: description,
-        amount: parseFloat(amount),
-        category: category,
-        date: date,
-      });
-      
-      console.log('Transaction created successfully');
-      alert('Трата добавлена!');
+
+      alert('Трата успешно добавлена!');
       router.push('/');
     } catch (e) {
-      console.error('Error:', e);
-      alert('Ошибка: Не удалось сохранить');
+      console.error('Ошибка сохранения:', e);
+      alert('Ошибка при сохранении');
+    } finally {
+      setIsSaving(false);
     }
   };
+
+  // Экран загрузки, пока ИИ думает
+  if (isParsing) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#6366F1" />
+        <Text style={styles.subtitle}>Распознаём трату...</Text>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -90,13 +145,7 @@ export default function ConfirmScreen() {
       <View style={styles.card}>
         <Text style={styles.label}>Сумма (₽)</Text>
         {isEditing ? (
-          <TextInput
-            style={styles.input}
-            value={amount}
-            onChangeText={setAmount}
-            keyboardType="numeric"
-            placeholder="0"
-          />
+          <TextInput style={styles.input} value={amount} onChangeText={setAmount} keyboardType="numeric" />
         ) : (
           <Text style={styles.value}>{amount} ₽</Text>
         )}
@@ -104,45 +153,29 @@ export default function ConfirmScreen() {
         <Text style={styles.label}>Категория</Text>
         {isEditing ? (
           <View style={styles.categoriesRow}>
-            {CATEGORIES.map((cat) => (
-              <TouchableOpacity
-                key={cat}
-                style={[styles.catBtn, category === cat && styles.catBtnActive]}
-                onPress={() => {
-                  console.log('Category selected:', cat);
-                  setCategory(cat);
-                }}
-              >
-                <Text style={[styles.catText, category === cat && styles.catTextActive]}>
-                  {cat}
-                </Text>
-              </TouchableOpacity>
+            {categories.map((cat) => (
+              <CategoryButton
+                key={cat.id}
+                name={cat.name}
+                isActive={category === cat.name}
+                onPress={() => setCategory(cat.name)}
+              />
             ))}
           </View>
         ) : (
           <Text style={styles.value}>{category}</Text>
         )}
 
-        <Text style={styles.label}>Дата (ГГГГ-ММ-ДД)</Text>
+        <Text style={styles.label}>Дата</Text>
         {isEditing ? (
-          <TextInput
-            style={styles.input}
-            value={date}
-            onChangeText={setDate}
-            placeholder="2026-10-14"
-          />
+          <TextInput style={styles.input} value={date} onChangeText={setDate} />
         ) : (
           <Text style={styles.value}>{date}</Text>
         )}
 
         <Text style={styles.label}>Описание</Text>
         {isEditing ? (
-          <TextInput
-            style={[styles.input, { minHeight: 60 }]}
-            value={description}
-            onChangeText={setDescription}
-            multiline
-          />
+          <TextInput style={[styles.input, { minHeight: 60 }]} value={description} onChangeText={setDescription} multiline />
         ) : (
           <Text style={styles.valueDescription}>{description}</Text>
         )}
@@ -159,41 +192,20 @@ export default function ConfirmScreen() {
         </>
       ) : (
         <>
-          <TouchableOpacity style={styles.buttonConfirm} onPress={handleConfirm}>
-            <Text style={styles.buttonConfirmText}>✓ Подтвердить</Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={styles.buttonEdit} 
-            onPress={() => {
-              console.log('Edit button pressed');
-              setIsEditing(true);
-            }}
+          <TouchableOpacity
+            style={[styles.buttonConfirm, isSaving && styles.buttonDisabled]}
+            onPress={handleConfirm}
+            disabled={isSaving}
           >
-            <Text style={styles.buttonEditText}>✎ Исправить</Text>
+            <Text style={styles.buttonConfirmText}>
+              {isSaving ? 'Сохранение...' : '✓ Подтвердить'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.buttonEdit} onPress={() => setIsEditing(true)}>
+            <Text style={styles.buttonEditText}> Исправить</Text>
           </TouchableOpacity>
         </>
       )}
     </ScrollView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FAFAF9' },
-  content: { padding: 20, paddingTop: 40, paddingBottom: 40 },
-  title: { fontSize: 24, fontWeight: '700', color: '#1C1917', marginBottom: 8 },
-  subtitle: { fontSize: 14, color: '#57534E', marginBottom: 24 },
-  card: { backgroundColor: '#FFF', borderRadius: 20, padding: 20, marginBottom: 24 },
-  label: { fontSize: 13, color: '#A8A29E', marginTop: 12, marginBottom: 4, textTransform: 'uppercase' },
-  value: { fontSize: 18, fontWeight: '600', color: '#F59E0B', paddingVertical: 8 },
-  valueDescription: { fontSize: 16, color: '#1C1917', paddingVertical: 8 },
-  input: { backgroundColor: '#F5F5F4', borderRadius: 12, padding: 12, fontSize: 16, color: '#1C1917', borderWidth: 1, borderColor: '#E7E5E4' },
-  categoriesRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
-  catBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: '#F5F5F4', borderWidth: 1, borderColor: '#E7E5E4' },
-  catBtnActive: { backgroundColor: '#EEF2FF', borderColor: '#6366F1' },
-  catText: { fontSize: 14, color: '#57534E' },
-  catTextActive: { color: '#6366F1', fontWeight: '600' },
-  buttonConfirm: { backgroundColor: '#6366F1', borderRadius: 16, padding: 18, alignItems: 'center', marginBottom: 12 },
-  buttonConfirmText: { color: '#FFF', fontSize: 16, fontWeight: '600' },
-  buttonEdit: { backgroundColor: '#FFF', borderRadius: 16, padding: 18, alignItems: 'center', borderWidth: 1, borderColor: '#E7E5E4' },
-  buttonEditText: { color: '#6366F1', fontSize: 16, fontWeight: '600' },
-});

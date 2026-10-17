@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware  # <-- Добавили этот импорт
 from app.api.v1.transactions import router as transactions_router
 
 app = FastAPI(
@@ -9,8 +10,16 @@ app = FastAPI(
     openapi_url="/openapi.json"
 )
 
-app.include_router(transactions_router, prefix="/api/v1")
+# <-- Добавили этот блок для разрешения запросов с фронтенда
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Для разработки разрешаем все источники
+    allow_credentials=True,
+    allow_methods=["*"],  # Разрешаем GET, POST, PATCH и т.д.
+    allow_headers=["*"],
+)
 
+app.include_router(transactions_router, prefix="/api/v1")
 
 @app.get("/health")
 def health():
