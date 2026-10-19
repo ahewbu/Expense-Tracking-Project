@@ -50,16 +50,35 @@ export default function TransactionsScreen() {
   };
 
   const handleDelete = async () => {
-    if (!selectedTransaction) return;
+    console.log('=== НАЧАЛО УДАЛЕНИЯ ===');
+    console.log('Выбранная транзакция:', selectedTransaction);
+    
+    if (!selectedTransaction) {
+      console.log('❌ Нет выбранной транзакции');
+      return;
+    }
+    
+    console.log('✅ Вызвана handleDelete, ID:', selectedTransaction.id);
     
     try {
+      console.log('📡 Отправляем DELETE запрос...');
       await deleteTransaction(selectedTransaction.id);
-      setTransactions((prev) => prev.filter((t) => t.id !== selectedTransaction.id));
+      console.log('✅ Удаление успешно!');
+      
+      setTransactions((prev) => {
+        console.log('Обновляем список, было:', prev.length);
+        const newTransactions = prev.filter((t) => t.id !== selectedTransaction.id);
+        console.log('Стало:', newTransactions.length);
+        return newTransactions;
+      });
+      
       setModalVisible(false);
       setSelectedTransaction(null);
+      console.log('=== КОНЕЦ УДАЛЕНИЯ ===');
     } catch (e) {
-      console.error('Ошибка удаления:', e);
-      alert('Не удалось удалить трату');
+      console.error(' Ошибка удаления:', e);
+      console.error('Детали:', e.response?.data);
+      alert(`Не удалось удалить трату: ${e.message}`);
     }
   };
 

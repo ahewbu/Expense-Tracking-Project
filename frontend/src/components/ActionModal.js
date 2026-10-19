@@ -1,62 +1,62 @@
-import { View, Text, Modal, TouchableOpacity, StyleSheet, Pressable, Alert } from 'react-native';
+import { View, Text, Modal, TouchableOpacity, Pressable, StyleSheet } from 'react-native';
 import { capitalizeFirst } from '../utils/text';
+import ConfirmModal from './ConfirmModal';
+import { useState } from 'react';
 
 /**
- * Красивое модальное окно с действиями.
- * 
- * Пропсы:
- * - visible: boolean (показывать ли окно)
- * - title: строка (название расхода)
- * - onClose: функция (закрыть окно)
- * - onEdit: функция (редактировать)
- * - onDelete: функция (удалить)
+ * Модальное окно с действиями (Редактировать, Удалить, Отмена).
+ * Теперь использует кастомное окно подтверждения вместо Alert.
  */
 export default function ActionModal({ visible, title, onClose, onEdit, onDelete }) {
+  const [confirmVisible, setConfirmVisible] = useState(false);
+
   const handleDeletePress = () => {
-    Alert.alert(
-      'Удалить трату?',
-      `Вы уверены, что хотите удалить "${capitalizeFirst(title)}"? Это действие нельзя отменить.`,
-      [
-        { text: 'Отмена', style: 'cancel' },
-        {
-          text: 'Удалить',
-          style: 'destructive',
-          onPress: onDelete,
-        },
-      ]
-    );
+    // Открываем кастомное окно подтверждения
+    setConfirmVisible(true);
+  };
+
+  const handleConfirmDelete = () => {
+    setConfirmVisible(false);
+    onDelete(); // Вызываем удаление
   };
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-    >
-      <Pressable style={styles.overlay} onPress={onClose}>
-        <View style={styles.container}>
-          {/* Название расхода */}
-          <Text style={styles.title}>{capitalizeFirst(title)}</Text>
-          <Text style={styles.subtitle}>Выберите действие</Text>
+    <>
+      <Modal
+        visible={visible}
+        transparent
+        animationType="fade"
+        onRequestClose={onClose}
+      >
+        <Pressable style={styles.overlay} onPress={onClose}>
+          <View style={styles.container}>
+            <Text style={styles.title}>{capitalizeFirst(title)}</Text>
+            <Text style={styles.subtitle}>Выберите действие</Text>
 
-          {/* Кнопки Редактировать и Удалить в одной строке */}
-          <View style={styles.buttonsRow}>
-            <TouchableOpacity style={styles.editButton} onPress={onEdit}>
-              <Text style={styles.editButtonText}>Редактировать</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.deleteButton} onPress={handleDeletePress}>
-              <Text style={styles.deleteButtonText}>Удалить</Text>
+            <View style={styles.buttonsRow}>
+              <TouchableOpacity style={styles.editButton} onPress={onEdit}>
+                <Text style={styles.editButtonText}>Редактировать</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.deleteButton} onPress={handleDeletePress}>
+                <Text style={styles.deleteButtonText}>Удалить</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity style={styles.cancelButton} onPress={onClose}>
+              <Text style={styles.cancelButtonText}>Отмена</Text>
             </TouchableOpacity>
           </View>
+        </Pressable>
+      </Modal>
 
-          {/* Кнопка Отмена внизу */}
-          <TouchableOpacity style={styles.cancelButton} onPress={onClose}>
-            <Text style={styles.cancelButtonText}>Отмена</Text>
-          </TouchableOpacity>
-        </View>
-      </Pressable>
-    </Modal>
+      {/* Кастомное окно подтверждения удаления */}
+      <ConfirmModal
+        visible={confirmVisible}
+        title={title}
+        onClose={() => setConfirmVisible(false)}
+        onConfirm={handleConfirmDelete}
+      />
+    </>
   );
 }
 
