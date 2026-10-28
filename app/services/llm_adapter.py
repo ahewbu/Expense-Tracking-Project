@@ -58,10 +58,10 @@ async def get_gigachat_token() -> str:
             logger.info("Токен GigaChat успешно получен")
             return token
     except httpx.HTTPError as e:
-        logger.error(f"HTTP ошибка при получении токена: {e}")
+        logger.error(f"HTTP ошибка при получении токена: {e}", exc_info=True)
         raise
     except Exception as e:
-        logger.error(f"Неожиданная ошибка при получении токена: {e}")
+        logger.error(f"Неожиданная ошибка при получении токена: {e}", exc_info=True)
         raise
 
 
@@ -151,14 +151,14 @@ async def parse_expense_text(text: str) -> TransactionParseResponse:
             return TransactionParseResponse(**data)
         
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON from LLM: {cleaned_content}")
+            logger.error(f"Failed to parse JSON from LLM: {cleaned_content}", exc_info=True)
             raise ValueError(f"LLM вернул невалидный JSON: {e}")
         except Exception as e:
-            logger.error(f"Validation error: {e}")
+            logger.error(f"Validation error: {e}", exc_info=True)
             raise ValueError(f"Ошибка валидации ответа LLM: {e}")
     
     except httpx.HTTPError as e:
-        logger.error(f"Сбой сети при запросе к GigaChat: {e}")
+        logger.error(f"Сбой сети при запросе к GigaChat: {e}", exc_info=True)
         logger.warning("Активирован FALLBACK-режим: возвращаем транзакцию со статусом pending (валидация пропущена)")
         
         # Используем model_construct, чтобы обойти строгий валидатор amount > 0
@@ -171,7 +171,7 @@ async def parse_expense_text(text: str) -> TransactionParseResponse:
     
     except Exception as e:
         # Ловим вообще всё остальное, чтобы гарантировать, что приложение не упадёт с 500
-        logger.error(f"Неожиданная критическая ошибка в LLM-адаптере: {e}")
+        logger.error(f"Неожиданная критическая ошибка в LLM-адаптере: {e}", exc_info=True)
         logger.warning("Активирован FALLBACK-режим из-за непредвиденной ошибки")
         
         return TransactionParseResponse.model_construct(

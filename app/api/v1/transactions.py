@@ -17,6 +17,9 @@ from app.schemas.transaction import (
     CategoryCreate,
 )
 from app.services.llm_adapter import parse_expense_text
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/transactions", tags=["Transactions"])
 
@@ -117,27 +120,29 @@ async def parse_and_save_transaction(
         # 2. Вызываем LLM-адаптер для парсинга текста
         parsed_data = await parse_expense_text(payload.text)
         
+        # Явная проверка на None перед записью в БД (ТЗ спринта 2, задача 1)
+        if parsed_data.amount is None or parsed_data.amount <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Сумма не распознана или некорректна. Пожалуйста, укажите сумму расхода."
+            )
+        
         # 3. Маппим категорию из строки в UUID (находим или создаём)
         category = get_or_create_category_by_name(db, parsed_data.category.value, user.id)
         
         # 4. Обрабатываем дату (преобразуем строку в datetime)
-        transaction_date = datetime.now()  # По умолчанию — текущая дата
+        transaction_date = datetime.now()
         if parsed_data.date:
             try:
-                # Парсим строку "YYYY-MM-DD" в datetime
                 parsed_date = datetime.strptime(parsed_data.date, "%Y-%m-%d")
                 transaction_date = parsed_date.replace(tzinfo=transaction_date.tzinfo)
             except ValueError:
-                # Если не удалось распарсить — используем текущую дату
                 pass
         
-        # 5. Обрабатываем сумму (если LLM вернул null — устанавливаем 0)
-        amount = parsed_data.amount if parsed_data.amount is not None else 0.0
-        
-        # 6. Создаём транзакцию в БД
+        # 5. Создаём транзакцию в БД
         new_transaction = Transaction(
             user_id=user.id,
-            amount=amount,
+            amount=parsed_data.amount,
             currency="RUB",
             category_id=category.id,
             description=parsed_data.description,
@@ -150,17 +155,17 @@ async def parse_and_save_transaction(
         db.commit()
         db.refresh(new_transaction)
         
-        # 7. Возвращаем результат
         return new_transaction
     
+    except HTTPException:
+        # Пробрасываем HTTP-исключения (например, нашу проверку на amount)
+        raise
     except ValueError as e:
-        # Ошибка парсинга JSON от LLM
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Ошибка парсинга: {str(e)}"
         )
     except Exception as e:
-        # Любая другая ошибка
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Ошибка при создании транзакции: {str(e)}"
