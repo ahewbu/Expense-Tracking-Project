@@ -40,8 +40,7 @@ class TransactionParseResponse(BaseModel):
     amount: Optional[float] = Field(
         None, 
         description="Сумма (null, если ИИ не услышал)", 
-        example=250.0,
-        ge=0
+        example=250.0
     )
     category: CategoryName = Field(
         ..., 
@@ -59,6 +58,16 @@ class TransactionParseResponse(BaseModel):
         example="Кофе",
         max_length=500
     )
+
+    @field_validator('amount')
+    @classmethod
+    def amount_must_be_positive(cls, v: Optional[float]) -> float:
+        """Строгий валидатор: сумма не может быть None или <= 0"""
+        if v is None:
+            raise ValueError('Сумма не распознана. Пожалуйста, укажите сумму расхода.')
+        if v <= 0:
+            raise ValueError('Сумма должна быть строго больше 0')
+        return v
 
 
 class TransactionCreate(BaseModel):
