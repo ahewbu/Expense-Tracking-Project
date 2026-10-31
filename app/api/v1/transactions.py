@@ -18,6 +18,8 @@ from app.schemas.transaction import (
 )
 from app.services.llm_adapter import parse_expense_text
 import logging
+from fastapi import UploadFile, File
+from app.services.asr import transcribe_audio
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +94,92 @@ async def parse_transaction(payload: TransactionParseRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Ошибка при вызове LLM: {str(e)}"
+        )
+
+# === ЭНДПОИНТ: Транскрибация аудио (ASR) ===
+@router.post(
+    "/transcribe",
+    summary="Транскрибация аудио в текст (ASR)",
+    description="Принимает аудиофайл (wav, mp3, m4a) и возвращает распознанный текст."
+)
+async def transcribe_audio_endpoint(file: UploadFile = File(...)):
+    """
+    Принимает аудиофайл и возвращает текст.
+    """
+    # Базовая проверка типа файла
+    if not file.content_type or not file.content_type.startswith("audio/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Файл должен быть аудиоформата (audio/*)"
+        )
+    
+    try:
+        # Читаем файл в байты
+        audio_bytes = await file.read()
+        
+        # Вызываем наш новый сервис
+        text = transcribe_audio(audio_bytes)
+        
+        return {"text": text}
+    
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Внутренняя ошибка сервера при обработке аудио: {str(e)}"
+        )
+
+# === ЭНДПОИНТ: Голосовой ввод (Аудио -> Текст -> Парсинг через LLM) ===
+@router.post(
+    "/voice",
+    response_model=TransactionParseResponse,
+    summary="Голосовой ввод: Аудио -> Текст -> Парсинг",
+    description="Принимает аудиофайл, переводит в текст через ASR, парсит через LLM и возвращает структуру транзакции."
+)
+async def voice_transaction(file: UploadFile = File(...)):
+    """
+    Сквозной процесс для голосового ввода:
+    1. Принимает аудиофайл.
+    2. Распознает речь в текст (ASR).
+    3. Отправляет текст в GigaChat для извлечения суммы и категории.
+    4. Возвращает готовый JSON транзакции.
+    """
+    # 1. Базовая проверка типа файла
+    if not file.content_type or not file.content_type.startswith("audio/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Файл должен быть аудиоформата (audio/*)"
+        )
+    
+    try:
+        # 2. Читаем файл и вызываем ASR сервис
+        audio_bytes = await file.read()
+        text = transcribe_audio(audio_bytes)
+        logger.info(f"🎙 ASR распознал текст: '{text}'")
+        
+        # 3. Передаем текст в LLM-парсер
+        logger.info(f"🤖 Отправляем распознанный текст в LLM для парсинга...")
+        parsed_data = await parse_expense_text(text)
+        
+        # 4. Возвращаем результат
+        return parsed_data
+    
+    except ValueError as e:
+        # Ошибки от ASR (плохое аудио) или от LLM (невалидный JSON)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        # Любые другие непредвиденные ошибки
+        logger.error(f"Критическая ошибка в эндпоинте /voice: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Внутренняя ошибка сервера при обработке голосового ввода"
         )
 
 # === ЭНДПОИНТ: Сквозной процесс (парсинг + сохранение) ===
