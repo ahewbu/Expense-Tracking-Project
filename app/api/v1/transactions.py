@@ -1,9 +1,10 @@
-from fastapi import APIRouter, HTTPException, status, Depends, Query
+from fastapi import APIRouter, HTTPException, status, Depends, Query, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from typing import List, Optional
 from uuid import UUID
 from datetime import datetime
+import logging
 
 from app.db import get_db
 from app.models.models import User, Category, Transaction
@@ -17,49 +18,23 @@ from app.schemas.transaction import (
     CategoryCreate,
 )
 from app.services.llm_adapter import parse_expense_text
-import logging
-from fastapi import UploadFile, File
 from app.services.asr import transcribe_audio
+from app.core.security import get_current_user 
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/transactions", tags=["Transactions"])
 
 
-# === ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: Получить или создать тестового пользователя ===
-def get_or_create_test_user(db: Session) -> User:
-    """Создаёт тестового пользователя, если его нет."""
-    user = db.query(User).filter(User.email == "test@glenzhik2007.ru").first()
-    if not user:
-        user = User(
-            email="test@glenzhik2007.ru",
-            full_name="Тестовый пользователь"
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-    return user
-
 # === ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: Найти или создать категорию по названию ===
 def get_or_create_category_by_name(db: Session, category_name: str, user_id: UUID) -> Category:
-    """
-    Находит категорию по названию для пользователя.
-    Если не найдена — создаёт новую.
-    Возвращает объект Category с UUID.
-    """
-    # Ищем категорию по названию и user_id
+    """Находит категорию по названию для конкретного пользователя или создаёт новую."""
     category = db.query(Category).filter(
         Category.name == category_name,
         Category.user_id == user_id
     ).first()
     
-    # Если не нашли — создаём
     if not category:
-        category = Category(
-            user_id=user_id,
-            name=category_name,
-            icon=""  # Пустая иконка по умолчанию
-        )
+        category = Category(user_id=user_id, name=category_name, icon="")
         db.add(category)
         db.commit()
         db.refresh(category)
@@ -67,158 +42,81 @@ def get_or_create_category_by_name(db: Session, category_name: str, user_id: UUI
     return category
 
 
-# === ЭНДПОИНТ 1: Парсинг текста через LLM ===
+# === ЭНДПОИНТ 1: Парсинг текста через LLM (можно оставить без auth для тестов) ===
 @router.post(
     "/parse",
     response_model=TransactionParseResponse,
-    summary="Распарсить текст через LLM",
-    description="Принимает сырой текст (голосовой ввод), отправляет в GigaChat, возвращает распознанную транзакцию в формате JSON."
+    summary="Распарсить текст через LLM"
 )
 async def parse_transaction(payload: TransactionParseRequest):
-    """
-    Пример запроса:
-    ```json
-    {"text": "Купил кофе за 250 рублей"}
-    ```
-    """
     try:
-        from app.services.llm_adapter import parse_expense_text
         result = await parse_expense_text(payload.text)
         return result
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Ошибка при вызове LLM: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Ошибка LLM: {str(e)}")
 
-# === ЭНДПОИНТ: Транскрибация аудио (ASR) ===
+
+# === ЭНДПОИНТ 2: Транскрибация аудио (ASR) ===
 @router.post(
     "/transcribe",
-    summary="Транскрибация аудио в текст (ASR)",
-    description="Принимает аудиофайл (wav, mp3, m4a) и возвращает распознанный текст."
+    summary="Транскрибация аудио в текст (ASR)"
 )
 async def transcribe_audio_endpoint(file: UploadFile = File(...)):
-    """
-    Принимает аудиофайл и возвращает текст.
-    """
-    # Базовая проверка типа файла
     if not file.content_type or not file.content_type.startswith("audio/"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Файл должен быть аудиоформата (audio/*)"
-        )
+        raise HTTPException(status_code=400, detail="Файл должен быть аудиоформата")
     
     try:
-        # Читаем файл в байты
         audio_bytes = await file.read()
-        
-        # Вызываем наш новый сервис
         text = transcribe_audio(audio_bytes)
-        
         return {"text": text}
-    
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Внутренняя ошибка сервера при обработке аудио: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Ошибка обработки аудио: {str(e)}")
 
-# === ЭНДПОИНТ: Голосовой ввод (Аудио -> Текст -> Парсинг через LLM) ===
+
+# === ЭНДПОИНТ 3: Голосовой ввод (Аудио -> Текст -> Парсинг) ===
 @router.post(
     "/voice",
     response_model=TransactionParseResponse,
-    summary="Голосовой ввод: Аудио -> Текст -> Парсинг",
-    description="Принимает аудиофайл, переводит в текст через ASR, парсит через LLM и возвращает структуру транзакции."
+    summary="Голосовой ввод: Аудио -> Текст -> Парсинг"
 )
 async def voice_transaction(file: UploadFile = File(...)):
-    """
-    Сквозной процесс для голосового ввода:
-    1. Принимает аудиофайл.
-    2. Распознает речь в текст (ASR).
-    3. Отправляет текст в GigaChat для извлечения суммы и категории.
-    4. Возвращает готовый JSON транзакции.
-    """
-    # 1. Базовая проверка типа файла
     if not file.content_type or not file.content_type.startswith("audio/"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Файл должен быть аудиоформата (audio/*)"
-        )
+        raise HTTPException(status_code=400, detail="Файл должен быть аудиоформата")
     
     try:
-        # 2. Читаем файл и вызываем ASR сервис
         audio_bytes = await file.read()
         text = transcribe_audio(audio_bytes)
         logger.info(f"🎙 ASR распознал текст: '{text}'")
         
-        # 3. Передаем текст в LLM-парсер
-        logger.info(f"🤖 Отправляем распознанный текст в LLM для парсинга...")
         parsed_data = await parse_expense_text(text)
-        
-        # 4. Возвращаем результат
         return parsed_data
-    
-    except ValueError as e:
-        # Ошибки от ASR (плохое аудио) или от LLM (невалидный JSON)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
     except Exception as e:
-        # Любые другие непредвиденные ошибки
-        logger.error(f"Критическая ошибка в эндпоинте /voice: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Внутренняя ошибка сервера при обработке голосового ввода"
-        )
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка при обработке голосового ввода")
 
-# === ЭНДПОИНТ: Сквозной процесс (парсинг + сохранение) ===
+
+# === ЭНДПОИНТ 4: Сквозной процесс (парсинг + сохранение) ===
 @router.post(
     "/parse-and-save",
     response_model=TransactionResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Распарсить текст и сохранить транзакцию",
-    description="Принимает текст, парсит через LLM, маппит категорию и сохраняет транзакцию в БД. Возвращает готовую транзакцию."
+    summary="Распарсить текст и сохранить транзакцию"
 )
 async def parse_and_save_transaction(
     payload: TransactionParseRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)  # <-- ЗАЩИТА
 ):
-    """
-    Сквозной процесс:
-    1. Парсит текст через LLM
-    2. Находит/создаёт категорию по названию
-    3. Сохраняет транзакцию в БД
-    4. Возвращает TransactionResponse
-    """
     try:
-        # 1. Получаем или создаём тестового пользователя
-        user = get_or_create_test_user(db)
-        
-        # 2. Вызываем LLM-адаптер для парсинга текста
         parsed_data = await parse_expense_text(payload.text)
         
-        # Явная проверка на None перед записью в БД (ТЗ спринта 2, задача 1)
         if parsed_data.amount is None or parsed_data.amount <= 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Сумма не распознана или некорректна. Пожалуйста, укажите сумму расхода."
-            )
+            raise HTTPException(status_code=400, detail="Сумма не распознана или некорректна")
         
-        # 3. Маппим категорию из строки в UUID (находим или создаём)
-        category = get_or_create_category_by_name(db, parsed_data.category.value, user.id)
+        # Используем current_user.id вместо тестового пользователя!
+        category = get_or_create_category_by_name(db, parsed_data.category.value, current_user.id)
         
-        # 4. Обрабатываем дату (преобразуем строку в datetime)
         transaction_date = datetime.now()
         if parsed_data.date:
             try:
@@ -227,14 +125,13 @@ async def parse_and_save_transaction(
             except ValueError:
                 pass
         
-        # 5. Создаём транзакцию в БД
         new_transaction = Transaction(
-            user_id=user.id,
+            user_id=current_user.id,  # <-- ЗАЩИТА
             amount=parsed_data.amount,
             currency="RUB",
             category_id=category.id,
             description=parsed_data.description,
-            source="llm",
+            source="voice" if payload.text else "llm",
             transaction_date=transaction_date,
             status="pending"
         )
@@ -242,47 +139,37 @@ async def parse_and_save_transaction(
         db.add(new_transaction)
         db.commit()
         db.refresh(new_transaction)
-        
         return new_transaction
     
     except HTTPException:
-        # Пробрасываем HTTP-исключения (например, нашу проверку на amount)
         raise
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Ошибка парсинга: {str(e)}"
-        )
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Ошибка при создании транзакции: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Ошибка при создании транзакции: {str(e)}")
 
-# === ЭНДПОИНТ 2: Создать транзакцию ===
+
+# === ЭНДПОИНТ 5: Создать транзакцию вручную ===
 @router.post(
     "/",
     response_model=TransactionResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Создать транзакцию",
-    description="Сохраняет подтверждённую транзакцию в PostgreSQL."
+    summary="Создать транзакцию"
 )
 async def create_transaction(
     transaction: TransactionCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)  # <-- ЗАЩИТА
 ):
-    """Сохраняет транзакцию после подтверждения пользователем."""
-    user = get_or_create_test_user(db)
+    # Проверяем, что категория принадлежит именно этому пользователю
+    category = db.query(Category).filter(
+        Category.id == transaction.category_id,
+        Category.user_id == current_user.id  # <-- ЗАЩИТА
+    ).first()
     
-    category = db.query(Category).filter(Category.id == transaction.category_id).first()
     if not category:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Категория с ID {transaction.category_id} не найдена"
-        )
+        raise HTTPException(status_code=404, detail="Категория не найдена")
     
     new_transaction = Transaction(
-        user_id=user.id,
+        user_id=current_user.id,  # <-- ЗАЩИТА
         amount=transaction.amount,
         currency="RUB",
         category_id=transaction.category_id,
@@ -295,201 +182,168 @@ async def create_transaction(
     db.add(new_transaction)
     db.commit()
     db.refresh(new_transaction)
-    
     return new_transaction
 
 
-# === ЭНДПОИНТ 3: Получить список транзакций (ЗАДАНИЕ 7.1) ===
+# === ЭНДПОИНТ 6: Получить список транзакций ===
 @router.get(
     "/",
     response_model=List[TransactionResponse],
-    summary="Получить список транзакций",
-    description="Возвращает список транзакций пользователя с пагинацией и фильтрацией."
+    summary="Получить список транзакций"
 )
 async def get_transactions(
-    skip: int = Query(0, ge=0, description="Количество пропускаемых записей (offset)"),
-    limit: int = Query(100, ge=1, le=1000, description="Максимальное количество записей"),
-    status_filter: Optional[str] = Query(None, alias="status", description="Фильтр по статусу: pending, confirmed, rejected"),
-    db: Session = Depends(get_db)
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    status_filter: Optional[str] = Query(None, alias="status"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)  # <-- ЗАЩИТА
 ):
-    """
-    Возвращает список транзакций с пагинацией и фильтрацией.
+    # Фильтруем ТОЛЬКО транзакции текущего пользователя
+    query = db.query(Transaction).filter(Transaction.user_id == current_user.id)
     
-    Параметры:
-    - skip: количество пропускаемых записей (для пагинации)
-    - limit: максимальное количество записей (1-1000)
-    - status: фильтр по статусу (pending, confirmed, rejected)
-    
-    Сортировка: по transaction_date DESC (новые сначала)
-    """
-    # Базовый запрос
-    query = db.query(Transaction)
-    
-    # Фильтрация по статусу, если передан
     if status_filter:
-        if status_filter not in ["pending", "confirmed", "rejected"]:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Статус должен быть одним из: pending, confirmed, rejected"
-            )
         query = query.filter(Transaction.status == status_filter)
-    
-    # Сортировка по transaction_date DESC (новые сначала)
+        
     query = query.order_by(desc(Transaction.transaction_date))
-    
-    # Пагинация
-    transactions = query.offset(skip).limit(limit).all()
-    
-    return transactions
+    return query.offset(skip).limit(limit).all()
 
 
-# === ЭНДПОИНТ 4: Обновить транзакцию (ЗАДАНИЕ 7.2) ===
+# === ЭНДПОИНТ 7: Обновить транзакцию ===
 @router.patch(
     "/{transaction_id}",
     response_model=TransactionResponse,
-    summary="Обновить транзакцию",
-    description="Обновляет поля конкретной транзакции."
+    summary="Обновить транзакцию"
 )
 async def update_transaction(
     transaction_id: UUID,
     payload: TransactionUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)  # <-- ЗАЩИТА
 ):
-    """
-    Обновляет транзакцию по ID.
+    transaction = db.query(Transaction).filter(
+        Transaction.id == transaction_id,
+        Transaction.user_id == current_user.id  # <-- ЗАЩИТА
+    ).first()
     
-    Если status меняется на 'confirmed' — проверяет обязательные поля (amount, category_id).
-    """
-    # Находим транзакцию
-    transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
     if not transaction:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Транзакция не найдена"
-        )
+        raise HTTPException(status_code=404, detail="Транзакция не найдена")
     
-    # Если статус меняется на confirmed — проверяем обязательные поля
     if payload.status == "confirmed":
         if not transaction.amount or transaction.amount <= 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Для подтверждения транзакции поле amount обязательно"
-            )
+            raise HTTPException(status_code=400, detail="Amount обязателен для подтверждения")
         if not transaction.category_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Для подтверждения транзакции поле category_id обязательно"
-            )
-    
-    # Обновляем только переданные поля
+            raise HTTPException(status_code=400, detail="Category обязателен для подтверждения")
+            
     update_data = payload.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(transaction, field, value)
-    
+        
     db.commit()
     db.refresh(transaction)
-    
     return transaction
 
 
-# === ЭНДПОИНТ 5: Удалить транзакцию ===
+# === ЭНДПОИНТ 8: Удалить транзакцию ===
 @router.delete(
     "/{transaction_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Удалить транзакцию",
-    description="Удаляет транзакцию по ID."
+    summary="Удалить транзакцию"
 )
 async def delete_transaction(
     transaction_id: UUID,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)  # <-- ЗАЩИТА
 ):
-    """Удаляет транзакцию."""
-    transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
-    if not transaction:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Транзакция не найдена"
-        )
+    transaction = db.query(Transaction).filter(
+        Transaction.id == transaction_id,
+        Transaction.user_id == current_user.id  # <-- ЗАЩИТА
+    ).first()
     
+    if not transaction:
+        raise HTTPException(status_code=404, detail="Транзакция не найдена")
+        
     db.delete(transaction)
     db.commit()
-    
     return None
 
 
-# === ЭНДПОИНТ 6: Получить список категорий ===
+# === ЭНДПОИНТ 9: Получить список категорий ===
 @router.get(
     "/categories",
     response_model=List[CategoryResponse],
-    summary="Получить список категорий",
-    description="Возвращает все категории пользователя. Фронтенд использует это для маппинга строки от ИИ в UUID."
+    summary="Получить список категорий"
 )
-async def get_categories(db: Session = Depends(get_db)):
-    """Возвращает список категорий."""
-    user = get_or_create_test_user(db)
-    
-    categories = db.query(Category).filter(Category.user_id == user.id).all()
+async def get_categories(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)  # <-- ЗАЩИТА
+):
+    categories = db.query(Category).filter(Category.user_id == current_user.id).all()
     
     if not categories:
-        standard_categories = [
-            {"name": "Еда", "icon": ""},
-            {"name": "Транспорт", "icon": ""},
-            {"name": "Жилье", "icon": ""},
-            {"name": "Развлечения", "icon": "🎬"},
-            {"name": "Здоровье", "icon": ""},
-            {"name": "Одежда", "icon": "👕"},
-            {"name": "Связь", "icon": ""},
-            {"name": "Прочее", "icon": "📦"},
+        standard = [
+            {"name": "Еда", "icon": ""}, {"name": "Транспорт", "icon": "🚗"},
+            {"name": "Жилье", "icon": ""}, {"name": "Развлечения", "icon": "🎬"},
+            {"name": "Здоровье", "icon": ""}, {"name": "Одежда", "icon": "👕"},
+            {"name": "Связь", "icon": ""}, {"name": "Прочее", "icon": "📦"},
         ]
-        
-        for cat_data in standard_categories:
-            category = Category(
-                user_id=user.id,
-                name=cat_data["name"],
-                icon=cat_data["icon"]
-            )
-            db.add(category)
-        
+        for cat_data in standard:
+            db.add(Category(user_id=current_user.id, name=cat_data["name"], icon=cat_data["icon"]))
         db.commit()
-        categories = db.query(Category).filter(Category.user_id == user.id).all()
-    
+        categories = db.query(Category).filter(Category.user_id == current_user.id).all()
+        
     return categories
 
 
-# === ЭНДПОИНТ 7: Создать категорию ===
+# === ЭНДПОИНТ 10: Создать категорию ===
 @router.post(
     "/categories",
     response_model=CategoryResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Создать категорию",
-    description="Создаёт новую категорию для пользователя."
+    summary="Создать категорию"
 )
 async def create_category(
     payload: CategoryCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)  # <-- ЗАЩИТА
 ):
-    """Создаёт категорию."""
-    user = get_or_create_test_user(db)
-    
     existing = db.query(Category).filter(
-        Category.user_id == user.id,
+        Category.user_id == current_user.id,
         Category.name == payload.name
     ).first()
     
     if existing:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Категория '{payload.name}' уже существует"
-        )
-    
-    new_category = Category(
-        user_id=user.id,
-        name=payload.name,
-        icon=payload.icon
-    )
-    
-    db.add(new_category)
+        raise HTTPException(status_code=400, detail="Категория уже существует")
+        
+    new_cat = Category(user_id=current_user.id, name=payload.name, icon=payload.icon)
+    db.add(new_cat)
     db.commit()
-    db.refresh(new_category)
+    db.refresh(new_cat)
+    return new_cat
+
+
+# === ЭНДПОИНТ 11: Удалить категорию ===
+@router.delete(
+    "/categories/{category_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Удалить категорию"
+)
+async def delete_category(
+    category_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)  # <-- ЗАЩИТА
+):
+    category = db.query(Category).filter(
+        Category.id == category_id,
+        Category.user_id == current_user.id
+    ).first()
     
-    return new_category
+    if not category:
+        raise HTTPException(status_code=404, detail="Категория не найдена")
+        
+    count = db.query(Transaction).filter(Transaction.category_id == category_id).count()
+    if count > 0:
+        raise HTTPException(status_code=400, detail=f"Категория используется в {count} транзакциях")
+        
+    db.delete(category)
+    db.commit()
+    return None
