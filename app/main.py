@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.transactions import router as transactions_router
 from app.api.v1.auth import router as auth_router 
+from app.api.v1.stats import router as stats_router
+
 app = FastAPI(
     title="Геленджик 2007 API",
     version="0.2.0",  
@@ -22,6 +24,7 @@ app.add_middleware(
 # Подключаем роутеры
 app.include_router(auth_router, prefix="/api/v1")  
 app.include_router(transactions_router, prefix="/api/v1")
+app.include_router(stats_router, prefix="/api/v1")
 
 
 @app.get("/health")

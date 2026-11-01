@@ -4,7 +4,6 @@ from typing import Optional, List
 from uuid import UUID
 from enum import Enum
 
-
 class CategoryName(str, Enum):
     """Категории расходов (ИСПРАВЛЕНО: убраны пробелы)"""
     FOOD = "Еда"
@@ -125,21 +124,21 @@ class TransactionUpdate(BaseModel):
 
 
 class TransactionResponse(BaseModel):
-    """То, что бэкенд возвращает при GET и после POST/PATCH"""
+    """Ответ с данными транзакции (включая имя категории)."""
     id: UUID
     user_id: UUID
     amount: float
     currency: str
-    category_id: Optional[UUID] = None
-    description: Optional[str] = None
+    category_id: UUID
+    category_name: str 
+    description: str
     source: str
     transaction_date: datetime
     status: str
     created_at: datetime
-    
+
     class Config:
         from_attributes = True
-
 
 class CategoryResponse(BaseModel):
     id: UUID
@@ -153,3 +152,23 @@ class CategoryResponse(BaseModel):
 class CategoryCreate(BaseModel):
     name: str = Field(..., example="Еда", min_length=1, max_length=100)
     icon: Optional[str] = Field(None, example="", max_length=50)
+
+
+class CategoryStat(BaseModel):
+    """Статистика по одной категории."""
+    category_id: UUID
+    category_name: str
+    total: float
+
+
+class PeriodInfo(BaseModel):
+    """Период статистики."""
+    from_date: Optional[str] = None
+    to_date: Optional[str] = None
+
+
+class StatsSummaryResponse(BaseModel):
+    """Ответ со сводной статистикой."""
+    period: PeriodInfo
+    total: float
+    by_category: List[CategoryStat]

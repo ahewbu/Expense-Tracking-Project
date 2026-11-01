@@ -106,7 +106,7 @@ async def voice_transaction(file: UploadFile = File(...)):
 async def parse_and_save_transaction(
     payload: TransactionParseRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)  # <-- ЗАЩИТА
+    current_user: User = Depends(get_current_user)
 ):
     try:
         parsed_data = await parse_expense_text(payload.text)
@@ -114,7 +114,6 @@ async def parse_and_save_transaction(
         if parsed_data.amount is None or parsed_data.amount <= 0:
             raise HTTPException(status_code=400, detail="Сумма не распознана или некорректна")
         
-        # Используем current_user.id вместо тестового пользователя!
         category = get_or_create_category_by_name(db, parsed_data.category.value, current_user.id)
         
         transaction_date = datetime.now()
@@ -126,12 +125,12 @@ async def parse_and_save_transaction(
                 pass
         
         new_transaction = Transaction(
-            user_id=current_user.id,  # <-- ЗАЩИТА
+            user_id=current_user.id,
             amount=parsed_data.amount,
             currency="RUB",
             category_id=category.id,
             description=parsed_data.description,
-            source="voice" if payload.text else "llm",
+            source="llm",
             transaction_date=transaction_date,
             status="pending"
         )
@@ -139,7 +138,21 @@ async def parse_and_save_transaction(
         db.add(new_transaction)
         db.commit()
         db.refresh(new_transaction)
-        return new_transaction
+        
+        # Возвращаем с category_name
+        return {
+            "id": new_transaction.id,
+            "user_id": new_transaction.user_id,
+            "amount": new_transaction.amount,
+            "currency": new_transaction.currency,
+            "category_id": new_transaction.category_id,
+            "category_name": category.name,
+            "description": new_transaction.description,
+            "source": new_transaction.source,
+            "transaction_date": new_transaction.transaction_date,
+            "status": new_transaction.status,
+            "created_at": new_transaction.created_at,
+        }
     
     except HTTPException:
         raise
@@ -157,19 +170,18 @@ async def parse_and_save_transaction(
 async def create_transaction(
     transaction: TransactionCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)  # <-- ЗАЩИТА
+    current_user: User = Depends(get_current_user)
 ):
-    # Проверяем, что категория принадлежит именно этому пользователю
     category = db.query(Category).filter(
         Category.id == transaction.category_id,
-        Category.user_id == current_user.id  # <-- ЗАЩИТА
+        Category.user_id == current_user.id
     ).first()
     
     if not category:
         raise HTTPException(status_code=404, detail="Категория не найдена")
     
     new_transaction = Transaction(
-        user_id=current_user.id,  # <-- ЗАЩИТА
+        user_id=current_user.id,
         amount=transaction.amount,
         currency="RUB",
         category_id=transaction.category_id,
@@ -182,7 +194,20 @@ async def create_transaction(
     db.add(new_transaction)
     db.commit()
     db.refresh(new_transaction)
-    return new_transaction
+    
+    return {
+        "id": new_transaction.id,
+        "user_id": new_transaction.user_id,
+        "amount": new_transaction.amount,
+        "currency": new_transaction.currency,
+        "category_id": new_transaction.category_id,
+        "category_name": category.name,
+        "description": new_transaction.description,
+        "source": new_transaction.source,
+        "transaction_date": new_transaction.transaction_date,
+        "status": new_transaction.status,
+        "created_at": new_transaction.created_at,
+    }
 
 
 # === ЭНДПОИНТ 6: Получить список транзакций ===
@@ -196,16 +221,40 @@ async def get_transactions(
     limit: int = Query(100, ge=1, le=1000),
     status_filter: Optional[str] = Query(None, alias="status"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)  # <-- ЗАЩИТА
+    current_user: User = Depends(get_current_user)
 ):
-    # Фильтруем ТОЛЬКО транзакции текущего пользователя
-    query = db.query(Transaction).filter(Transaction.user_id == current_user.id)
+    # JOIN с таблицей категорий для получения category_name
+    query = (
+        db.query(Transaction, Category.name.label("category_name"))
+        .join(Category, Transaction.category_id == Category.id)
+        .filter(Transaction.user_id == current_user.id)
+    )
     
     if status_filter:
         query = query.filter(Transaction.status == status_filter)
         
     query = query.order_by(desc(Transaction.transaction_date))
-    return query.offset(skip).limit(limit).all()
+    results = query.offset(skip).limit(limit).all()
+    
+    # Преобразуем результат в список словарей для Pydantic
+    transactions = []
+    for transaction, category_name in results:
+        transaction_dict = {
+            "id": transaction.id,
+            "user_id": transaction.user_id,
+            "amount": transaction.amount,
+            "currency": transaction.currency,
+            "category_id": transaction.category_id,
+            "category_name": category_name,
+            "description": transaction.description,
+            "source": transaction.source,
+            "transaction_date": transaction.transaction_date,
+            "status": transaction.status,
+            "created_at": transaction.created_at,
+        }
+        transactions.append(transaction_dict)
+    
+    return transactions
 
 
 # === ЭНДПОИНТ 7: Обновить транзакцию ===
@@ -218,11 +267,11 @@ async def update_transaction(
     transaction_id: UUID,
     payload: TransactionUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)  # <-- ЗАЩИТА
+    current_user: User = Depends(get_current_user)
 ):
     transaction = db.query(Transaction).filter(
         Transaction.id == transaction_id,
-        Transaction.user_id == current_user.id  # <-- ЗАЩИТА
+        Transaction.user_id == current_user.id
     ).first()
     
     if not transaction:
@@ -237,10 +286,26 @@ async def update_transaction(
     update_data = payload.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(transaction, field, value)
-        
+    
     db.commit()
     db.refresh(transaction)
-    return transaction
+    
+    # Получаем имя категории
+    category = db.query(Category).filter(Category.id == transaction.category_id).first()
+    
+    return {
+        "id": transaction.id,
+        "user_id": transaction.user_id,
+        "amount": transaction.amount,
+        "currency": transaction.currency,
+        "category_id": transaction.category_id,
+        "category_name": category.name if category else "",
+        "description": transaction.description,
+        "source": transaction.source,
+        "transaction_date": transaction.transaction_date,
+        "status": transaction.status,
+        "created_at": transaction.created_at,
+    }
 
 
 # === ЭНДПОИНТ 8: Удалить транзакцию ===
