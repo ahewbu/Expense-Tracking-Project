@@ -180,3 +180,77 @@ async def parse_expense_text(text: str) -> TransactionParseResponse:
             date=None,
             description=f"[Сбой системы] {text[:50]}"
         )
+
+async def generate_expense_insights(transactions: list, start_date: str, end_date: str) -> str:
+    """
+    Генерирует текстовые инсайты на основе списка транзакций за период.
+    """
+    logger.info(f"📊 Начало генерации инсайтов за период {start_date} - {end_date}")
+    
+    # 1. Форматируем транзакции в читаемый текст для LLM
+    if not transactions:
+        return "За указанный период транзакции не найдены. Начните добавлять расходы, чтобы получить анализ!"
+    
+    transactions_text = ""
+    total_amount = 0.0
+    for t in transactions:
+        # t - это объект SQLAlchemy, обращаемся к его атрибутам
+        amount = float(t.amount) if t.amount else 0.0
+        total_amount += amount
+        cat_name = t.category.name if t.category else "Без категории"
+        date_str = t.transaction_date.strftime("%Y-%m-%d") if t.transaction_date else "Неизвестно"
+        desc = t.description or "Без описания"
+        transactions_text += f"- {date_str} | {cat_name} | {amount:.2f} RUB | {desc}\n"
+    
+    # 2. Загружаем промпт
+    prompt_path = Path(__file__).parent.parent / "prompts" / "insights_analyzer_v1.txt"
+    try:
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            system_prompt = f.read()
+    except FileNotFoundError:
+        logger.error("Файл промпта insights_analyzer_v1.txt не найден")
+        raise ValueError("Ошибка конфигурации: промпт для инсайтов не найден")
+
+    # 3. Подставляем данные в промпт
+    final_prompt = system_prompt.format(
+        start_date=start_date,
+        end_date=end_date,
+        transactions_data=transactions_text.strip()
+    )
+
+    # 4. Получаем токен и делаем запрос к GigaChat
+    try:
+        token = await get_gigachat_token()
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}"
+        }
+        
+        payload = {
+            "model": "GigaChat",
+            "messages": [
+                {"role": "system", "content": "Ты полезный финансовый аналитик."},
+                {"role": "user", "content": final_prompt}
+            ],
+            "temperature": 0.3, # Немного выше, чтобы текст был более живым и креативным
+            "max_tokens": 800
+        }
+        
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as client: # Увеличиваем таймаут для длинного ответа
+            response = await client.post(GIGACHAT_CHAT_URL, headers=headers, json=payload)
+            response.raise_for_status()
+            result = response.json()
+            
+        # 5. Извлекаем текст
+        insights_text = result["choices"][0]["message"]["content"].strip()
+        logger.info("✅ Инсайты успешно сгенерированы")
+        return insights_text
+        
+    except httpx.RequestError as e:
+        logger.error(f"Сбой сети при запросе инсайтов: {e}", exc_info=True)
+        raise ValueError("Не удалось связаться с AI-аналитиком. Проверьте подключение к интернету.")
+    except Exception as e:
+        logger.error(f"Ошибка при генерации инсайтов: {e}", exc_info=True)
+        raise ValueError("Произошла внутренняя ошибка при анализе данных.")
