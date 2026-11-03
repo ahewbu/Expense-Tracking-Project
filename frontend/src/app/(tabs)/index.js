@@ -6,9 +6,10 @@ import { homeStyles } from '../../styles/homeStyles';
 import InsightCard from '../../components/InsightCard';
 import SectionCard from '../../components/SectionCard';
 import ActionModal from '../../components/ActionModal';
+import AddExpenseModal from '../../components/AddExpenseModal';
 import { capitalizeFirst } from '../../utils/text';
+import { getCategoryColor } from '../../utils/categoryColors';
 
-// Стили, которых нет в склонированном homeStyles — добавляем локально
 const local = StyleSheet.create({
   pendingItemHighlight: { backgroundColor: '#FEF3C7', borderWidth: 1, borderColor: '#F59E0B' },
   readyToConfirmHighlight: { backgroundColor: '#EEF2FF', borderWidth: 2, borderColor: '#6366F1' },
@@ -19,6 +20,7 @@ const styles = { ...homeStyles, ...local };
 export default function HomeScreen() {
   const [transactions, setTransactions] = useState([]);
   const [modalVisible, setModalVisible] = useState(false);
+  const [addModalVisible, setAddModalVisible] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState(null);
   const [pendingConfirmId, setPendingConfirmId] = useState(null);
   const lastTapTime = useRef(0);
@@ -42,7 +44,6 @@ export default function HomeScreen() {
     return `Сегодня, ${today.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}`;
   };
 
-  // Двойное нажатие — подтвердить трату
   const handleTransactionPress = async (item) => {
     if (item.status !== 'pending') return;
     const now = Date.now();
@@ -119,7 +120,10 @@ export default function HomeScreen() {
               activeOpacity={0.7}
             >
               <View
-                style={[styles.transactionDot, { backgroundColor: '#6366F1' }]}
+                style={[
+                  styles.transactionDot,
+                  { backgroundColor: getCategoryColor(item.category_name || 'Без категории') },
+                ]}
               />
               <View style={styles.transactionInfo}>
                 <Text style={styles.transactionName}>{capitalizeFirst(item.description || '')}</Text>
@@ -140,7 +144,8 @@ export default function HomeScreen() {
         )}
       </SectionCard>
 
-      <TouchableOpacity style={styles.fab} onPress={() => router.push('/add-expense')}>
+      {/* FAB открывает модальное окно, а не отдельный экран */}
+      <TouchableOpacity style={styles.fab} onPress={() => setAddModalVisible(true)}>
         <Text style={styles.fabText}>+</Text>
       </TouchableOpacity>
 
@@ -150,6 +155,12 @@ export default function HomeScreen() {
         onClose={() => { setModalVisible(false); setSelectedTransaction(null); }}
         onEdit={handleEdit}
         onDelete={handleDelete}
+      />
+
+      <AddExpenseModal
+        visible={addModalVisible}
+        onClose={() => setAddModalVisible(false)}
+        onExpenseAdded={loadTransactions}
       />
     </View>
   );
