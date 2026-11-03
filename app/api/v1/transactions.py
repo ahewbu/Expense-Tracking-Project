@@ -75,25 +75,91 @@ async def transcribe_audio_endpoint(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Ошибка обработки аудио: {str(e)}")
 
 
-# === ЭНДПОИНТ 3: Голосовой ввод (Аудио -> Текст -> Парсинг) ===
+
+# === ЭНДПОИНТ 3: Голосовой ввод (Аудио -> Текст -> Парсинг -> СОХРАНЕНИЕ) ===
 @router.post(
     "/voice",
-    response_model=TransactionParseResponse,
-    summary="Голосовой ввод: Аудио -> Текст -> Парсинг"
+    response_model=TransactionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Голосовой ввод: Аудио -> Текст -> Парсинг -> Сохранение",
 )
-async def voice_transaction(file: UploadFile = File(...)):
+async def voice_transaction(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Принимает аудио, распознаёт, парсит через LLM и СОХРАНЯЕТ транзакцию пользователя."""
     if not file.content_type or not file.content_type.startswith("audio/"):
         raise HTTPException(status_code=400, detail="Файл должен быть аудиоформата")
-    
+
     try:
+        # 1. ASR: аудио -> текст
         audio_bytes = await file.read()
         text = transcribe_audio(audio_bytes)
         logger.info(f"🎙 ASR распознал текст: '{text}'")
-        
+
+        # 2. LLM: текст -> структура
         parsed_data = await parse_expense_text(text)
-        return parsed_data
+        logger.info(f"🤖 LLM распарсил: amount={parsed_data.amount}, category={parsed_data.category}")
+
+        # 3. Проверка суммы (как в parse-and-save)
+        if parsed_data.amount is None or parsed_data.amount <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Сумма не распознана или некорректна. Повторите фразу с суммой.",
+            )
+
+        # 4. Категория: найти или создать для текущего пользователя
+        category = get_or_create_category_by_name(db, parsed_data.category.value, current_user.id)
+
+        # 5. Дата: из ответа LLM или сегодняшняя
+        transaction_date = datetime.now()
+        if parsed_data.date:
+            try:
+                parsed_date = datetime.strptime(parsed_data.date, "%Y-%m-%d").date()
+                transaction_date = datetime.combine(parsed_date, datetime.now().time())
+            except ValueError:
+                pass
+
+        # 6. Сохраняем транзакцию от имени авторизованного пользователя
+        new_transaction = Transaction(
+            user_id=current_user.id,
+            amount=parsed_data.amount,
+            currency="RUB",
+            category_id=category.id,
+            description=parsed_data.description,
+            source="voice",
+            transaction_date=transaction_date,
+            status="pending",
+        )
+        db.add(new_transaction)
+        db.commit()
+        db.refresh(new_transaction)
+        logger.info(f"✅ Голосовая транзакция сохранена: {new_transaction.id}")
+
+        # 7. Возвращаем полный ответ с category_name (контракт как у parse-and-save)
+        return {
+            "id": new_transaction.id,
+            "user_id": new_transaction.user_id,
+            "amount": new_transaction.amount,
+            "currency": new_transaction.currency,
+            "category_id": new_transaction.category_id,
+            "category_name": category.name,
+            "description": new_transaction.description,
+            "source": new_transaction.source,
+            "transaction_date": new_transaction.transaction_date,
+            "status": new_transaction.status,
+            "created_at": new_transaction.created_at,
+        }
+
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Внутренняя ошибка при обработке голосового ввода")
+        logger.error(f"Критическая ошибка в /voice: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Внутренняя ошибка при обработке голосового ввода",
+        )
 
 
 # === ЭНДПОИНТ 4: Сквозной процесс (парсинг + сохранение) ===
@@ -119,8 +185,8 @@ async def parse_and_save_transaction(
         transaction_date = datetime.now()
         if parsed_data.date:
             try:
-                parsed_date = datetime.strptime(parsed_data.date, "%Y-%m-%d")
-                transaction_date = parsed_date.replace(tzinfo=transaction_date.tzinfo)
+                parsed_date = datetime.strptime(parsed_data.date, "%Y-%m-%d").date()
+                transaction_date = datetime.combine(parsed_date, datetime.now().time())
             except ValueError:
                 pass
         

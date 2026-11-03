@@ -15,8 +15,8 @@ import { useState } from 'react';
 import { createTransaction } from '../api/transactions';
 
 /**
- * Модальное окно добавления траты поверх главного экрана.
- * Фон затемняется (на вебе ещё и блюрится), карточка появляется по центру.
+ * Модальное окно добавления траты текстом.
+ * Поверх главного экрана: фон затемняется (на вебе — с блюром).
  */
 export default function AddExpenseModal({ visible, onClose, onExpenseAdded }) {
   const [text, setText] = useState('');
@@ -95,7 +95,6 @@ export default function AddExpenseModal({ visible, onClose, onExpenseAdded }) {
               <Text style={styles.cancelText}>Отмена</Text>
             </TouchableOpacity>
 
-            {/* Круглая кнопка с галочкой вместо большой кнопки */}
             <TouchableOpacity
               style={[styles.checkButton, isLoading && styles.checkButtonDisabled]}
               onPress={handleAdd}
@@ -122,8 +121,7 @@ const styles = StyleSheet.create({
   },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(28, 25, 23, 0.55)', // затемнение
-    // Блюр работает в веб-версии
+    backgroundColor: 'rgba(28, 25, 23, 0.55)',
     ...(Platform.OS === 'web'
       ? { backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)' }
       : null),

@@ -87,3 +87,26 @@ export const register = async (email, password, fullName) => {
   });
   return response.data;
 };
+
+// === Голосовой ввод: аудио -> /voice (требует токен, токен подставится сам) ===
+export const sendVoiceTransaction = async (uri) => {
+  const formData = new FormData();
+  let file;
+
+  if (uri.startsWith('http') || uri.startsWith('blob:')) {
+    // Веб: превращаем blob-URI в File
+    const resp = await fetch(uri);
+    const blob = await resp.blob();
+    file = new File([blob], 'voice.m4a', { type: 'audio/m4a' });
+  } else {
+    // Телефон: передаём URI файла как есть
+    file = { uri, name: 'voice.m4a', type: 'audio/m4a' };
+  }
+
+  formData.append('file', file);
+
+  const response = await api.post('/api/v1/transactions/voice', formData, {
+    timeout: 90000, // первый запрос грузит модель whisper
+  });
+  return response.data;
+};
