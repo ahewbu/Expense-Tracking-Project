@@ -1,13 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.transactions import router as transactions_router
-from app.api.v1.auth import router as auth_router 
+from app.api.v1.auth import router as auth_router
 from app.api.v1.stats import router as stats_router
 from app.api.v1.insights import router as insights_router
 
 app = FastAPI(
     title="Геленджик 2007 API",
-    version="0.2.0",  
+    version="0.2.0",
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json"
@@ -23,11 +23,10 @@ app.add_middleware(
 )
 
 # Подключаем роутеры
-app.include_router(auth_router, prefix="/api/v1")  
+app.include_router(auth_router, prefix="/api/v1")
 app.include_router(transactions_router, prefix="/api/v1")
 app.include_router(stats_router, prefix="/api/v1")
-app.include_router(insights_router)
-
+app.include_router(insights_router, prefix="/api/v1")  # ✅ С ПРЕФИКСОМ
 
 @app.get("/health")
 def health():

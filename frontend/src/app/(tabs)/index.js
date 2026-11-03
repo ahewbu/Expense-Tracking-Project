@@ -1,8 +1,13 @@
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useState, useCallback, useRef } from 'react';
-import { getTransactions, updateTransaction, deleteTransaction } from '../../api/transactions';
+import {
+  getTransactions,
+  updateTransaction,
+  deleteTransaction,
+  getInsights,
+} from '../../api/transactions';
 import { homeStyles } from '../../styles/homeStyles';
 import InsightCard from '../../components/InsightCard';
 import SectionCard from '../../components/SectionCard';
@@ -12,7 +17,6 @@ import VoiceRecordButton from '../../components/VoiceRecordButton';
 import { capitalizeFirst } from '../../utils/text';
 import { getCategoryColor } from '../../utils/categoryColors';
 
-// Высота таб-бара. Если кнопка висит слишком высоко/низко над ним — подстрой это число
 const TAB_BAR_HEIGHT = 76;
 
 const local = StyleSheet.create({
@@ -20,7 +24,8 @@ const local = StyleSheet.create({
   readyToConfirmHighlight: { backgroundColor: '#EEF2FF', borderWidth: 2, borderColor: '#6366F1' },
   pendingBadgeText: { fontSize: 11, color: '#D97706', marginTop: 4, fontWeight: '600' },
   screen: { flex: 1, backgroundColor: '#FAFAF9' },
-  scrollContent: { flexGrow: 1, padding: 24, paddingBottom: 12 },
+  content: { padding: 24, paddingBottom: 12 },
+  spacer: { flex: 1, minHeight: 8 },
   addControls: {
     alignItems: 'center',
     gap: 12,
@@ -51,6 +56,7 @@ export default function HomeScreen() {
   const [addModalVisible, setAddModalVisible] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState(null);
   const [pendingConfirmId, setPendingConfirmId] = useState(null);
+  const [insightText, setInsightText] = useState('Анализируем твои траты...');
   const lastTapTime = useRef(0);
 
   const loadTransactions = useCallback(async () => {
@@ -61,11 +67,31 @@ export default function HomeScreen() {
       );
       setTransactions(sorted.slice(0, 3));
     } catch (e) {
-      console.error('Ошибка загрузки:', e);
+      console.error('Ошибка загрузки трат:', e);
     }
   }, []);
 
-  useFocusEffect(useCallback(() => { loadTransactions(); }, [loadTransactions]));
+  const loadInsights = useCallback(async () => {
+    try {
+      const now = new Date();
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      const fmt = (d) =>
+        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+      const data = await getInsights(fmt(start), fmt(now));
+      setInsightText(data?.short_insight || 'Здесь будут инсайты от ИИ. Начни добавлять траты!');
+    } catch (e) {
+      console.error('Ошибка загрузки инсайтов:', e);
+      setInsightText('Здесь будут инсайты от ИИ. Скоро я начну анализировать твои траты!');
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadTransactions();
+      loadInsights();
+    }, [loadTransactions, loadInsights])
+  );
 
   const getFormattedDate = () => {
     const today = new Date();
@@ -123,17 +149,12 @@ export default function HomeScreen() {
   };
 
   return (
-    // Весь экран с отступом снизу: безопасная зона + таб-бар → контент не уползает под него
     <View style={[styles.screen, { paddingBottom: insets.bottom + TAB_BAR_HEIGHT }]}>
-      {/* Верхняя часть: скроллится внутри себя ТОЛЬКО если не помещается */}
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
+      <View style={styles.content}>
         <Text style={styles.greeting}>Привет! 👋</Text>
         <Text style={styles.dateText}>{getFormattedDate()}</Text>
 
-        <InsightCard text="Здесь будут инсайты от ИИ. Скоро я начну анализировать твои траты!" />
+        <InsightCard text={insightText} />
 
         <SectionCard
           title="Последние траты"
@@ -175,9 +196,10 @@ export default function HomeScreen() {
             <Text style={styles.emptyText}>Пока нет трат</Text>
           )}
         </SectionCard>
-      </ScrollView>
+      </View>
 
-      {/* Кнопки ввода: закреплены внизу, ВСЕГДА видны над таб-баром */}
+      <View style={styles.spacer} />
+
       <View style={styles.addControls}>
         <VoiceRecordButton onResult={() => loadTransactions()} />
         <TouchableOpacity style={styles.textButton} onPress={() => setAddModalVisible(true)}>

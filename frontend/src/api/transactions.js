@@ -22,9 +22,7 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Токен невалиден или истёк
       console.warn('Токен недействителен, требуется повторный вход');
-      // Здесь можно добавить редирект на логин
     }
     return Promise.reject(error);
   }
@@ -64,6 +62,27 @@ export const deleteTransaction = async (transactionId) => {
   return response.data;
 };
 
+// === Голосовой ввод: аудио -> /voice ===
+export const sendVoiceTransaction = async (uri) => {
+  const formData = new FormData();
+  let file;
+
+  if (uri.startsWith('http') || uri.startsWith('blob:')) {
+    const resp = await fetch(uri);
+    const blob = await resp.blob();
+    file = new File([blob], 'voice.m4a', { type: 'audio/m4a' });
+  } else {
+    file = { uri, name: 'voice.m4a', type: 'audio/m4a' };
+  }
+
+  formData.append('file', file);
+
+  const response = await api.post('/api/v1/transactions/voice', formData, {
+    timeout: 90000,
+  });
+  return response.data;
+};
+
 // === Функции для авторизации ===
 
 export const login = async (email, password) => {
@@ -88,25 +107,14 @@ export const register = async (email, password, fullName) => {
   return response.data;
 };
 
-// === Голосовой ввод: аудио -> /voice (требует токен, токен подставится сам) ===
-export const sendVoiceTransaction = async (uri) => {
-  const formData = new FormData();
-  let file;
-
-  if (uri.startsWith('http') || uri.startsWith('blob:')) {
-    // Веб: превращаем blob-URI в File
-    const resp = await fetch(uri);
-    const blob = await resp.blob();
-    file = new File([blob], 'voice.m4a', { type: 'audio/m4a' });
-  } else {
-    // Телефон: передаём URI файла как есть
-    file = { uri, name: 'voice.m4a', type: 'audio/m4a' };
-  }
-
-  formData.append('file', file);
-
-  const response = await api.post('/api/v1/transactions/voice', formData, {
-    timeout: 90000, // первый запрос грузит модель whisper
+// === AI-инсайты (задача 6.2) ===
+export const getInsights = async (startDate, endDate) => {
+  const response = await api.get('/api/v1/insights/', {
+    params: {
+      start_date: startDate,
+      end_date: endDate,
+    },
+    timeout: 60000,
   });
   return response.data;
 };
