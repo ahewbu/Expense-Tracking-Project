@@ -1,96 +1,81 @@
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
 import { router } from 'expo-router';
 import { useState } from 'react';
+import { createTransaction } from '../api/transactions';
 
 export default function AddExpenseScreen() {
   const [text, setText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
 
   const handleAdd = async () => {
     if (!text.trim()) {
+      setError('Введите описание траты');
       return;
     }
-    
     setIsLoading(true);
-    
+    setError('');
     try {
-      // Имитируем парсинг ИИ, но НЕ сохраняем в mock
-      const amountMatch = text.match(/\d+/);
-      const amount = amountMatch ? parseInt(amountMatch[0]) : 0;
-      
-      const parsedData = {
-        id: String(Date.now()), // временный ID
-        text: text,
-        amount: amount,
-        category: 'Другое',
-        date: new Date().toISOString().split('T')[0],
-      };
-      
-      // Переход на экран подтверждения с параметрами
-      router.push({
-        pathname: '/confirm',
-        params: {
-          id: parsedData.id,
-          amount: String(parsedData.amount),
-          category: parsedData.category,
-          date: parsedData.date,
-          description: parsedData.text,
-        },
-      });
-      
+      await createTransaction(text.trim());
+      setText('');
+      router.back(); // Возврат на главный — список обновится сам
     } catch (e) {
-      alert('Не удалось распознать расход');
+      console.error('Ошибка добавления:', e);
+      setError(e.response?.data?.detail || 'Не удалось добавить трату. Попробуйте ещё раз.');
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.label}>Опишите трату</Text>
-      <Text style={styles.hint}>Например: "кофе 350 рублей" или "обед 800"</Text>
-      
+    <View style={styles.container}>
+      <Text style={styles.title}>Новая трата</Text>
+      <Text style={styles.subtitle}>Опиши трату своими словами — ИИ распознает сумму и категорию</Text>
+
       <TextInput
         style={styles.input}
-        placeholder="Введите текст..."
-        placeholderTextColor="#A8A29E"
+        placeholder="Например: кофе за 250 рублей"
         value={text}
         onChangeText={setText}
         multiline
-        numberOfLines={3}
-        textAlignVertical="top"
+        autoFocus
       />
-      
-      <TouchableOpacity 
-        style={[styles.button, (!text.trim() || isLoading) && styles.buttonDisabled]} 
+
+      {error !== '' && <Text style={styles.error}>{error}</Text>}
+
+      <TouchableOpacity
+        style={[styles.button, isLoading && styles.buttonDisabled]}
         onPress={handleAdd}
-        disabled={!text.trim() || isLoading}
+        disabled={isLoading}
       >
-        <Text style={styles.buttonText}>
-          {isLoading ? 'ИИ думает...' : 'Добавить'}
-        </Text>
+        <Text style={styles.buttonText}>{isLoading ? 'Добавляем...' : 'Добавить'}</Text>
       </TouchableOpacity>
-    </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FAFAF9' },
-  content: { padding: 20, paddingTop: 60, flexGrow: 1 },
-  label: { fontSize: 20, fontWeight: '600', color: '#1C1917', marginBottom: 8 },
-  hint: { fontSize: 14, color: '#57534E', marginBottom: 20 },
-  input: { 
-    backgroundColor: '#FFF', 
-    borderWidth: 1, 
-    borderColor: '#E7E5E4', 
-    borderRadius: 16, 
-    padding: 16, 
-    fontSize: 16, 
-    color: '#1C1917', 
-    minHeight: 100, 
-    marginBottom: 24 
+  container: { flex: 1, backgroundColor: '#FAFAF9', padding: 24 },
+  title: { fontSize: 28, fontWeight: '700', color: '#1C1917', marginTop: 40 },
+  subtitle: { fontSize: 14, color: '#A8A29E', marginTop: 8, marginBottom: 24 },
+  input: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    fontSize: 16,
+    borderWidth: 1,
+    borderColor: '#E7E5E4',
+    minHeight: 100,
+    textAlignVertical: 'top',
   },
-  button: { backgroundColor: '#6366F1', borderRadius: 16, padding: 18, alignItems: 'center' },
-  buttonDisabled: { opacity: 0.6 },
-  buttonText: { color: '#FFF', fontSize: 16, fontWeight: '600' },
+  error: { color: '#DC2626', fontSize: 14, marginTop: 12 },
+  button: {
+    backgroundColor: '#6366F1',
+    paddingVertical: 16,
+    borderRadius: 16,
+    alignItems: 'center',
+    marginTop: 16,
+  },
+  buttonDisabled: { opacity: 0.7 },
+  buttonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
 });

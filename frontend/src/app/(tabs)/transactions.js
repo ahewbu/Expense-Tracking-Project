@@ -1,30 +1,31 @@
-import { View, Text, FlatList, RefreshControl, Pressable } from 'react-native';
+import { View, Text, FlatList, RefreshControl, Pressable, StyleSheet } from 'react-native';
 import { useFocusEffect, router } from 'expo-router';
-import { useState, useCallback } from 'react';
-import { getTransactions, getCategories, deleteTransaction } from '../../api/transactions';
-import { transactionsStyles as styles } from '../../styles/transactionsStyles';
+import { useState, useCallback, useRef } from 'react';
+import { getTransactions, deleteTransaction, updateTransaction } from '../../api/transactions';
+import { transactionsStyles } from '../../styles/transactionsStyles';
 import TransactionCard from '../../components/TransactionCard';
 import ActionModal from '../../components/ActionModal';
 
+const local = StyleSheet.create({
+  pendingItemHighlight: { backgroundColor: '#FEF3C7', borderRadius: 16, borderWidth: 1, borderColor: '#F59E0B' },
+  readyToConfirmHighlight: { backgroundColor: '#EEF2FF', borderWidth: 2, borderColor: '#6366F1' },
+});
+const styles = { ...transactionsStyles, ...local };
+
 export default function TransactionsScreen() {
   const [transactions, setTransactions] = useState([]);
-  const [categories, setCategories] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState(null);
+  const [pendingConfirmId, setPendingConfirmId] = useState(null);
+  const lastTapTime = useRef(0);
 
   const loadData = useCallback(async () => {
     try {
-      const [categoriesData, transactionsData] = await Promise.all([
-        getCategories(),
-        getTransactions(),
-      ]);
-
-      setCategories(categoriesData);
-
-      const confirmed = transactionsData.filter((t) => t.status === 'confirmed');
-      const sorted = confirmed.sort(
-        (a, b) => new Date(b.transaction_date) - new Date(a.transaction_date)
+      const data = await getTransactions();
+      // Показываем ВСЕ траты (pending + confirmed)
+      const sorted = (data || []).sort(
+        (a, b) => new Date(b.transaction_date || b.created_at) - new Date(a.transaction_date || a.created_at)
       );
       setTransactions(sorted);
     } catch (e) {
@@ -32,11 +33,7 @@ export default function TransactionsScreen() {
     }
   }, []);
 
-  useFocusEffect(
-    useCallback(() => {
-      loadData();
-    }, [loadData])
-  );
+  useFocusEffect(useCallback(() => { loadData(); }, [loadData]));
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -44,48 +41,43 @@ export default function TransactionsScreen() {
     setRefreshing(false);
   }, [loadData]);
 
-  const getCategoryName = (categoryId) => {
-    const cat = categories.find((c) => c.id === categoryId);
-    return cat ? cat.name : 'Без категории';
+  const handleTransactionPress = async (item) => {
+    if (item.status !== 'pending') return;
+    const now = Date.now();
+    if (now - lastTapTime.current < 1000 && pendingConfirmId === item.id) {
+      try {
+        await updateTransaction(item.id, { status: 'confirmed' });
+        await loadData();
+        setPendingConfirmId(null);
+      } catch (e) {
+        console.error('Ошибка подтверждения:', e);
+      }
+    } else {
+      setPendingConfirmId(item.id);
+      lastTapTime.current = now;
+      setTimeout(() => setPendingConfirmId(null), 1000);
+    }
+  };
+
+  const handleLongPress = (item) => {
+    setSelectedTransaction(item);
+    setModalVisible(true);
   };
 
   const handleDelete = async () => {
-    console.log('=== НАЧАЛО УДАЛЕНИЯ ===');
-    console.log('Выбранная транзакция:', selectedTransaction);
-    
-    if (!selectedTransaction) {
-      console.log('❌ Нет выбранной транзакции');
-      return;
-    }
-    
-    console.log('✅ Вызвана handleDelete, ID:', selectedTransaction.id);
-    
+    if (!selectedTransaction) return;
     try {
-      console.log('📡 Отправляем DELETE запрос...');
       await deleteTransaction(selectedTransaction.id);
-      console.log('✅ Удаление успешно!');
-      
-      setTransactions((prev) => {
-        console.log('Обновляем список, было:', prev.length);
-        const newTransactions = prev.filter((t) => t.id !== selectedTransaction.id);
-        console.log('Стало:', newTransactions.length);
-        return newTransactions;
-      });
-      
       setModalVisible(false);
       setSelectedTransaction(null);
-      console.log('=== КОНЕЦ УДАЛЕНИЯ ===');
+      await loadData();
     } catch (e) {
-      console.error(' Ошибка удаления:', e);
-      console.error('Детали:', e.response?.data);
-      alert(`Не удалось удалить трату: ${e.message}`);
+      console.error('Ошибка удаления:', e);
     }
   };
 
   const handleEdit = () => {
     if (!selectedTransaction) return;
-    
-    // Переходим на экран редактирования с параметрами
     router.push({
       pathname: '/edit-expense',
       params: {
@@ -96,62 +88,50 @@ export default function TransactionsScreen() {
         transaction_date: selectedTransaction.transaction_date,
       },
     });
-    
     setModalVisible(false);
-  };
-
-  const handleLongPress = (item) => {
-    setSelectedTransaction(item);
-    setModalVisible(true);
   };
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Все траты</Text>
-      <Text style={styles.hint}>Долгое нажатие для действий</Text>
+      <Text style={styles.hint}>Двойное нажатие — подтвердить, долгое — действия</Text>
 
       <FlatList
         data={transactions}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
           <Pressable
+            onPress={() => handleTransactionPress(item)}
             onLongPress={() => handleLongPress(item)}
             delayLongPress={500}
             style={({ pressed }) => [
               styles.pressable,
               pressed && styles.pressableActive,
+              item.status === 'pending' && styles.pendingItemHighlight,
+              pendingConfirmId === item.id && styles.readyToConfirmHighlight,
             ]}
           >
             <TransactionCard
               description={item.description}
-              categoryName={getCategoryName(item.category_id)}
+              categoryName={item.category_name || 'Без категории'}
               date={item.transaction_date}
               amount={item.amount}
+              status={item.status}
+              isReadyToConfirm={pendingConfirmId === item.id}
             />
           </Pressable>
         )}
         contentContainerStyle={styles.listContent}
         refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={['#6366F1']}
-            tintColor="#6366F1"
-          />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#6366F1']} tintColor="#6366F1" />
         }
-        ListEmptyComponent={
-          <Text style={styles.empty}>Пока нет подтверждённых трат</Text>
-        }
+        ListEmptyComponent={<Text style={styles.empty}>Пока нет трат</Text>}
       />
 
-      {/* Модальное окно с действиями */}
       <ActionModal
         visible={modalVisible}
         title={selectedTransaction?.description || ''}
-        onClose={() => {
-          setModalVisible(false);
-          setSelectedTransaction(null);
-        }}
+        onClose={() => { setModalVisible(false); setSelectedTransaction(null); }}
         onEdit={handleEdit}
         onDelete={handleDelete}
       />
