@@ -118,3 +118,15 @@ export const getInsights = async (startDate, endDate) => {
   });
   return response.data;
 };
+
+// === Аналитика (задачи 5.2 + 5.3) ===
+export const getStatsSummary = async (startDate, endDate) => {
+  const response = await api.get('/api/v1/stats/summary', {
+    params: {
+      start_date: startDate,
+      end_date: endDate,
+    },
+    timeout: 30000,
+  });
+  return response.data;
+};
