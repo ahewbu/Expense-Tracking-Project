@@ -19,7 +19,7 @@ def get_whisper_model() -> WhisperModel:
         try:
             # device="cpu" (для совместимости). Если в будущем будет GPU, поменяем на "cuda"
             # compute_type="int8" значительно экономит оперативную память и ускоряет работу на CPU
-            _model = WhisperModel("base", device="cpu", compute_type="int8")
+            _model = WhisperModel("small", device="cpu", compute_type="int8")
             logger.info("✅ Модель faster-whisper успешно загружена в память")
         except Exception as e:
             logger.error(f"Критическая ошибка при загрузке модели Whisper: {e}", exc_info=True)
