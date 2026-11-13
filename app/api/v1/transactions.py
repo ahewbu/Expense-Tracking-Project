@@ -162,12 +162,13 @@ async def voice_transaction(
         )
 
 
-# === ЭНДПОИНТ 4: Сквозной процесс (парсинг + сохранение) ===
+# === ЭНДПОИНТ: Сквозной процесс (парсинг + сохранение) ===
 @router.post(
     "/parse-and-save",
     response_model=TransactionResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Распарсить текст и сохранить транзакцию"
+    summary="Распарсить текст и сохранить транзакцию",
+    description="Принимает текст, парсит через LLM, маппит категорию и сохраняет транзакцию в БД."
 )
 async def parse_and_save_transaction(
     payload: TransactionParseRequest,
@@ -175,13 +176,21 @@ async def parse_and_save_transaction(
     current_user: User = Depends(get_current_user)
 ):
     try:
+        # 1. Вызываем LLM-адаптер
         parsed_data = await parse_expense_text(payload.text)
         
-        if parsed_data.amount is None or parsed_data.amount <= 0:
-            raise HTTPException(status_code=400, detail="Сумма не распознана или некорректна")
+        # 2. ПУНКТ 1: Разрешаем amount=0 при сбое LLM (fallback)
+        is_fallback = parsed_data.description.startswith("[Сбой")
+        if parsed_data.amount is None or (parsed_data.amount <= 0 and not is_fallback):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Сумма не распознана или некорректна. Пожалуйста, укажите сумму расхода."
+            )
         
+        # 3. Маппим категорию (находим или создаём)
         category = get_or_create_category_by_name(db, parsed_data.category.value, current_user.id)
         
+        # 4. Обрабатываем дату
         transaction_date = datetime.now()
         if parsed_data.date:
             try:
@@ -190,6 +199,7 @@ async def parse_and_save_transaction(
             except ValueError:
                 pass
         
+        # 5. Создаём транзакцию в БД
         new_transaction = Transaction(
             user_id=current_user.id,
             amount=parsed_data.amount,
@@ -205,26 +215,36 @@ async def parse_and_save_transaction(
         db.commit()
         db.refresh(new_transaction)
         
-        # Возвращаем с category_name
-        return {
-            "id": new_transaction.id,
-            "user_id": new_transaction.user_id,
-            "amount": new_transaction.amount,
-            "currency": new_transaction.currency,
-            "category_id": new_transaction.category_id,
-            "category_name": category.name,
-            "description": new_transaction.description,
-            "source": new_transaction.source,
-            "transaction_date": new_transaction.transaction_date,
-            "status": new_transaction.status,
-            "created_at": new_transaction.created_at,
-        }
+        # ==========================================================
+        # ИСПРАВЛЕНИЕ: Явно собираем Pydantic-модель для ответа
+        # ==========================================================
+        return TransactionResponse(
+            id=new_transaction.id,
+            user_id=new_transaction.user_id,
+            amount=new_transaction.amount,
+            currency=new_transaction.currency,
+            category_id=new_transaction.category_id,
+            category_name=category.name,  # <--- БЕРЁМ ИМЯ ИЗ ОБЪЕКТА КАТЕГОРИИ
+            description=new_transaction.description,
+            source=new_transaction.source,
+            transaction_date=new_transaction.transaction_date,
+            status=new_transaction.status,
+            created_at=new_transaction.created_at
+        )
+        # ==========================================================
     
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Ошибка парсинга: {str(e)}"
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка при создании транзакции: {str(e)}")
-
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при создании транзакции: {str(e)}"
+        )
 
 # === ЭНДПОИНТ 5: Создать транзакцию вручную ===
 @router.post(
