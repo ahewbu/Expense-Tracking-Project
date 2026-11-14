@@ -1,5 +1,7 @@
+import os
 from datetime import datetime, timedelta
 from typing import Optional
+
 import jwt
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
@@ -9,10 +11,19 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.models import User
 
-# === НАСТРОЙКИ (в продакшене SECRET_KEY нужно вынести в .env) ===
-SECRET_KEY = "super-secret-key-for-gelenzhik-2007"  
+# === НАСТРОЙКИ (читаем из переменных окружения) ===
+# Если SECRET_KEY не задан в .env — используем fallback (только для разработки!)
+SECRET_KEY = os.getenv("SECRET_KEY", "dev-fallback-key-change-in-production-!!!")
+
+# Проверка длины ключа (минимум 32 символа для HS256)
+if len(SECRET_KEY) < 32:
+    raise ValueError(
+        f"SECRET_KEY слишком короткий ({len(SECRET_KEY)} символов). "
+        "Минимум 32 символа. Сгенерируй через: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+    )
+
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # Токен живет 7 дней
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # Токен живёт 7 дней
 
 # === ХЕШИРОВАНИЕ ПАРОЛЕЙ ===
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")

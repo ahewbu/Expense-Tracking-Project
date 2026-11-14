@@ -23,6 +23,8 @@ services:
       dockerfile: Dockerfile
     container_name: glenzhik_api
     restart: unless-stopped
+    env_file:
+      - .env  # <-- НОВОЕ: читаем переменные из .env
     environment:
       DATABASE_URL: postgresql+psycopg://glenzhik:glenzhik_secret@db:5432/glenzhik
       ENV: development

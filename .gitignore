@@ -17,8 +17,8 @@ ENV/
 
 # --- Переменные окружения (секреты!) ---
 .env
-.env.*
 .env.local
+.env.production
 
 # --- IDE ---
 .vscode/
