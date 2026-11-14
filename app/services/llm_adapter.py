@@ -268,3 +268,94 @@ async def generate_expense_insights(transactions: list, start_date: str, end_dat
     except Exception as e:
         logger.error(f"Ошибка при генерации инсайтов: {e}", exc_info=True)
         raise ValueError("Произошла внутренняя ошибка при анализе данных.")
+
+async def generate_expense_insights_json(
+    total: float,
+    mandatory_total: float,
+    mandatory_ratio: float,
+    optional_total: float,
+    optional_ratio: float,
+    health_label: str,
+    savings_base: float,
+    transactions_text: str,
+    start_date: str,
+    end_date: str
+) -> dict:
+    """
+    Генерирует JSON-инсайты с использованием контекста от бизнес-логики.
+    """
+    logger.info(f"📊 Начало генерации JSON-инсайтов за период {start_date} - {end_date}")
+    
+    # 1. Загружаем промпт
+    prompt_path = Path(__file__).parent.parent / "prompts" / "insights_analyzer_v1.txt"
+    try:
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            system_prompt = f.read()
+    except FileNotFoundError:
+        logger.error("Файл промпта insights_analyzer_v1.txt не найден")
+        raise ValueError("Ошибка конфигурации: промпт для инсайтов не найден")
+
+    # 2. Подставляем данные через .replace() (чтобы не конфликтовать с JSON в промпте)
+    final_prompt = system_prompt
+    final_prompt = final_prompt.replace("{start_date}", start_date)
+    final_prompt = final_prompt.replace("{end_date}", end_date)
+    final_prompt = final_prompt.replace("{total}", f"{total:.0f}")
+    final_prompt = final_prompt.replace("{mandatory_total}", f"{mandatory_total:.0f}")
+    final_prompt = final_prompt.replace("{mandatory_ratio}", f"{mandatory_ratio:.1f}")
+    final_prompt = final_prompt.replace("{optional_total}", f"{optional_total:.0f}")
+    final_prompt = final_prompt.replace("{optional_ratio}", f"{optional_ratio:.1f}")
+    final_prompt = final_prompt.replace("{health_label}", health_label)
+    final_prompt = final_prompt.replace("{savings_base}", f"{savings_base:.0f}")
+    final_prompt = final_prompt.replace("{transactions_text}", transactions_text.strip())
+
+    # 3. Получаем токен
+    token = await get_gigachat_token()
+    
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token}"
+    }
+    
+    # 4. Запрос к GigaChat (БЕЗ response_format — GigaChat может его не поддерживать)
+    payload = {
+        "model": "GigaChat",
+        "messages": [
+            {"role": "system", "content": "Ты заботливый финансовый консультант."},
+            {"role": "user", "content": final_prompt}
+        ],
+        "temperature": 0.5,
+        "max_tokens": 1000
+    }
+    
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+            response = await client.post(GIGACHAT_CHAT_URL, headers=headers, json=payload)
+            response.raise_for_status()
+            result = response.json()
+        
+        # 5. Извлекаем и парсим JSON
+        raw_content = result["choices"][0]["message"]["content"].strip()
+        
+        # Очистка от markdown-оберток (на всякий случай)
+        if raw_content.startswith("```json"):
+            raw_content = raw_content[7:]
+        if raw_content.startswith("```"):
+            raw_content = raw_content[3:]
+        if raw_content.endswith("```"):
+            raw_content = raw_content[:-3]
+        raw_content = raw_content.strip()
+        
+        insights_data = json.loads(raw_content)
+        logger.info("✅ JSON-инсайты успешно сгенерированы")
+        return insights_data
+        
+    except httpx.RequestError as e:
+        logger.error(f"Сбой сети при запросе инсайтов: {e}", exc_info=True)
+        raise ValueError("Не удалось связаться с AI-аналитиком.")
+    except json.JSONDecodeError as e:
+        logger.error(f"LLM вернул невалидный JSON: {raw_content}", exc_info=True)
+        raise ValueError("AI вернул некорректный формат ответа.")
+    except Exception as e:
+        logger.error(f"Ошибка при генерации инсайтов: {e}", exc_info=True)
+        raise ValueError("Произошла внутренняя ошибка при анализе данных.")
