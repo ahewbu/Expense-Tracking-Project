@@ -1,45 +1,53 @@
 import { View, Text, TouchableOpacity, StyleSheet, Alert, Animated, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useState, useEffect, useRef } from 'react';
-import {
-  useAudioRecorder,
-  RecordingPresets,
-  requestRecordingPermissionsAsync,
-  setAudioModeAsync,
-} from 'expo-audio';
+import { useAudioRecorder, RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync } from 'expo-audio';
 import { sendVoiceTransaction } from '../api/transactions';
+import { colors, gradients, shadows } from '../theme/theme';
 
-/**
- * Круглая кнопка голосового ввода.
- * 1 клик — запись | клик мимо — отмена | 2 клик по кружку — обработка и сохранение.
- */
 export default function VoiceRecordButton({ onResult, disabled }) {
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [duration, setDuration] = useState(0);
-  const [pulseAnim] = useState(new Animated.Value(1));
+  
+  const ring1 = useRef(new Animated.Value(1)).current;
+  const ring2 = useRef(new Animated.Value(1)).current;
+  const btnScale = useRef(new Animated.Value(1)).current;
   const timerRef = useRef(null);
 
   useEffect(() => {
     if (isRecording) {
       timerRef.current = setInterval(() => setDuration((d) => d + 1), 1000);
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, { toValue: 1.15, duration: 700, useNativeDriver: true }),
-          Animated.timing(pulseAnim, { toValue: 1, duration: 700, useNativeDriver: true }),
-        ])
-      ).start();
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current);
-      setDuration(0);
-      pulseAnim.setValue(1);
+      
+      const makeRing = (anim, delay) =>
+        Animated.loop(
+          Animated.sequence([
+            Animated.delay(delay),
+            Animated.parallel([
+              Animated.timing(anim, { toValue: 2.2, duration: 1800, useNativeDriver: true }),
+              Animated.timing(anim, { toValue: 0, duration: 1800, useNativeDriver: true }),
+            ]),
+          ])
+        );
+      
+      Animated.timing(btnScale, { toValue: 1.15, duration: 300, useNativeDriver: true }).start();
+
+      const r1 = makeRing(ring1, 0);
+      const r2 = makeRing(ring2, 900);
+      r1.start(); r2.start();
+      
+      return () => {
+        if (timerRef.current) clearInterval(timerRef.current);
+        r1.stop(); r2.stop();
+        ring1.setValue(1); ring2.setValue(1);
+        Animated.timing(btnScale, { toValue: 1, duration: 300, useNativeDriver: true }).start();
+      };
     }
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [isRecording]);
 
-  const formatDuration = (s) =>
-    `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
+  const formatDuration = (s) => `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
 
   const start = async () => {
     try {
@@ -75,7 +83,6 @@ export default function VoiceRecordButton({ onResult, disabled }) {
     }
   };
 
-  // Отмена: просто останавливаем запись, НИЧЕГО не отправляем
   const cancel = async () => {
     try {
       setIsRecording(false);
@@ -87,64 +94,51 @@ export default function VoiceRecordButton({ onResult, disabled }) {
 
   return (
     <View style={styles.wrapper}>
-      {/* Прозрачный оверлей на весь экран: клик мимо = отмена */}
-      {isRecording && (
-        <TouchableOpacity style={styles.cancelOverlay} activeOpacity={1} onPress={cancel} />
-      )}
+      {isRecording && <TouchableOpacity style={styles.cancelOverlay} activeOpacity={1} onPress={cancel} />}
 
-      <TouchableOpacity
-        style={[
-          styles.micButton,
-          isRecording && styles.micButtonRecording,
-          (disabled || isProcessing) && styles.micButtonDisabled,
-        ]}
-        onPress={isRecording ? stopAndSend : start}
-        disabled={disabled || isProcessing}
-        activeOpacity={0.85}
-      >
-        {isProcessing ? (
-          <ActivityIndicator color="#FFFFFF" />
-        ) : (
-          <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
-            <Ionicons name={isRecording ? 'stop' : 'mic'} size={26} color="#FFFFFF" />
-          </Animated.View>
+      <View style={styles.ringZone}>
+        {isRecording && (
+          <>
+            <Animated.View style={[styles.ring, { transform: [{ scale: ring1 }], opacity: ring1 }]} />
+            <Animated.View style={[styles.ring, { transform: [{ scale: ring2 }], opacity: ring2 }]} />
+          </>
         )}
-      </TouchableOpacity>
 
-      <Text style={styles.timerText}>
-        {isProcessing ? 'Распознаём...' : isRecording ? formatDuration(duration) : 'Голосом'}
-      </Text>
+        <TouchableOpacity onPress={isRecording ? stopAndSend : start} disabled={disabled || isProcessing} activeOpacity={0.85} style={styles.btnTouch}>
+          <Animated.View style={{ transform: [{ scale: btnScale }] }}>
+            <LinearGradient
+              colors={gradients.accent}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={[styles.micButton, shadows.float, (disabled || isProcessing) && { opacity: 0.6 }]}
+            >
+              {isProcessing ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Ionicons name="mic" size={28} color="#FFFFFF" />
+              )}
+            </LinearGradient>
+          </Animated.View>
+        </TouchableOpacity>
+      </View>
+
+      {(isProcessing || isRecording) && (
+        <Text style={styles.timerText}>
+          {isProcessing ? 'Распознаём...' : formatDuration(duration)}
+        </Text>
+      )}
       {isRecording && <Text style={styles.hintText}>Клик мимо — отмена</Text>}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrapper: { alignItems: 'center', gap: 6 },
-  cancelOverlay: {
-    position: 'absolute',
-    top: -2000,
-    bottom: -2000,
-    left: -2000,
-    right: -2000,
-    zIndex: 10,
-  },
-  micButton: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: '#6366F1',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#6366F1',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    elevation: 5,
-    zIndex: 20,
-  },
-  micButtonRecording: { backgroundColor: '#EF4444' },
-  micButtonDisabled: { opacity: 0.6 },
-  timerText: { fontSize: 12, color: '#A8A29E', fontWeight: '500' },
-  hintText: { fontSize: 11, color: '#EF4444' },
+  wrapper: { alignItems: 'center', gap: 8 },
+  cancelOverlay: { position: 'absolute', top: -2000, bottom: -2000, left: -2000, right: -2000, zIndex: 10 },
+  ringZone: { width: 100, height: 100, justifyContent: 'center', alignItems: 'center' },
+  ring: { position: 'absolute', width: 64, height: 64, borderRadius: 32, borderWidth: 2, borderColor: colors.lavender },
+  btnTouch: { zIndex: 20 },
+  micButton: { width: 64, height: 64, borderRadius: 32, justifyContent: 'center', alignItems: 'center' },
+  timerText: { fontFamily: 'Ubuntu_500Medium', fontSize: 13, color: colors.textSecondary, marginTop: 4 },
+  hintText: { fontFamily: 'Ubuntu_400Regular', fontSize: 11, color: colors.terracotta, marginTop: -4 },
 });

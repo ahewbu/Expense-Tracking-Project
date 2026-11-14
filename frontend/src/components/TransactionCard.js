@@ -1,57 +1,52 @@
 import { View, Text, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { formatTransactionDate } from '../utils/date';
 import { capitalizeFirst } from '../utils/text';
-import { getCategoryColor } from '../utils/categoryColors';
+import { getCategoryIcon, getCategoryColor } from '../theme/icons';
+import { colors, radii } from '../theme/theme';
 
 export default function TransactionCard({ description, categoryName, date, amount, status, isReadyToConfirm }) {
-  const formattedDate = formatTransactionDate(date);
-  const capitalizedDescription = capitalizeFirst(description || '');
-  const categoryColor = getCategoryColor(categoryName);
+  const iconName = getCategoryIcon(categoryName);
+  const color = getCategoryColor(categoryName);
   const isPending = status === 'pending';
 
   return (
-    <View style={styles.card}>
-      <View style={[styles.categoryDot, { backgroundColor: categoryColor }]} />
-      <View style={styles.info}>
-        <View style={styles.titleRow}>
-          <Text style={styles.title}>{capitalizedDescription}</Text>
-          {isPending && (
-            <View style={[styles.pendingBadge, isReadyToConfirm && styles.readyToConfirmBadge]}>
-              <Text style={[styles.pendingText, isReadyToConfirm && styles.readyToConfirmText]}>
-                {isReadyToConfirm ? 'Ещё раз!' : 'Ожидает'}
-              </Text>
-            </View>
-          )}
-        </View>
-        <Text style={styles.subtitle}>{categoryName} · {formattedDate}</Text>
+    <View style={[styles.card, isReadyToConfirm && styles.readyCard]}>
+      <View style={[styles.iconWrap, { backgroundColor: color + '22' }]}>
+        <Ionicons name={iconName} size={20} color={color} />
       </View>
+
+      <View style={styles.info}>
+        <Text style={styles.title} numberOfLines={1}>
+          {capitalizeFirst(description || '')}
+        </Text>
+        <View style={styles.metaRow}>
+          {isPending && <View style={styles.statusDot} />}
+          <Text style={styles.subtitle}>
+            {categoryName} · {formatTransactionDate(date)}
+          </Text>
+        </View>
+        {isPending && (
+          <Text style={styles.hint}>
+            {isReadyToConfirm ? 'Нажми ещё раз' : 'Нажми дважды для подтверждения'}
+          </Text>
+        )}
+      </View>
+
       <Text style={styles.amount}>{amount} ₽</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  card: {
-    backgroundColor: '#FFF',
-    padding: 16,
-    borderRadius: 16,
-    marginBottom: 12,
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  categoryDot: { width: 10, height: 10, borderRadius: 5, marginRight: 12, marginTop: 6 },
+  card: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderRadius: radii.button },
+  readyCard: { backgroundColor: colors.lavenderSoft },
+  iconWrap: { width: 40, height: 40, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
   info: { flex: 1 },
-  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  title: { fontSize: 16, fontWeight: '500', color: '#1C1917' },
-  subtitle: { fontSize: 13, color: '#A8A29E', marginTop: 4 },
-  amount: { fontSize: 16, fontWeight: '600', color: '#F59E0B', marginTop: 4 },
-  pendingBadge: { backgroundColor: '#FEF3C7', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
-  pendingText: { color: '#D97706', fontSize: 11, fontWeight: '600' },
-  readyToConfirmBadge: { backgroundColor: '#6366F1' },
-  readyToConfirmText: { color: '#FFFFFF' },
+  title: { fontFamily: 'Ubuntu_500Medium', fontSize: 15, color: colors.text },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },
+  statusDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.sand },
+  subtitle: { fontFamily: 'Ubuntu_400Regular', fontSize: 12, color: colors.textMuted },
+  hint: { fontFamily: 'Ubuntu_400Regular', fontSize: 11, color: colors.lavenderDeep, marginTop: 2 },
+  amount: { fontFamily: 'Ubuntu_700Bold', fontSize: 15, color: colors.text, marginLeft: 8 },
 });

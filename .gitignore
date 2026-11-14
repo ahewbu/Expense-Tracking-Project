@@ -19,6 +19,7 @@ ENV/
 .env
 .env.local
 .env.production
+.env.example
 
 # --- IDE ---
 .vscode/
@@ -36,3 +37,4 @@ desktop.ini
 # --- Логи ---
 *.log
 logs/
+

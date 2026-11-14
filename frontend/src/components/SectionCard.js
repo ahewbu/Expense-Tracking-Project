@@ -1,22 +1,16 @@
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons'; // <-- ИСПРАВЛЕНО: встроенная библиотека Expo
+import { colors, radii, shadows, text as t } from '../theme/theme';
 
-/**
- * Универсальный блок секции с заголовком и стрелочкой.
- * Используется для "Последние траты", "Категории" и т.д.
- * 
- * Пропсы:
- * - title: строка (заголовок блока)
- * - onArrowPress: функция (что делать при нажатии на стрелку)
- * - children: содержимое блока (список трат и т.д.)
- */
-export default function SectionCard({ title, onArrowPress, children }) {
+export default function SectionCard({ title, actionLabel, onArrowPress, children }) {
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, shadows.card]}>
       <View style={styles.header}>
         <Text style={styles.title}>{title}</Text>
         {onArrowPress && (
-          <TouchableOpacity style={styles.arrow} onPress={onArrowPress}>
-            <Text style={styles.arrowText}>→</Text>
+          <TouchableOpacity style={styles.action} onPress={onArrowPress}>
+            <Text style={styles.actionText}>{actionLabel || 'Все'}</Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.lavenderDeep} />
           </TouchableOpacity>
         )}
       </View>
@@ -27,36 +21,23 @@ export default function SectionCard({ title, onArrowPress, children }) {
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 3,
+    backgroundColor: colors.surface,
+    borderRadius: radii.card,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 14,
   },
-
-  title: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1C1917',
-  },
-
-  arrow: {
-    padding: 4,
-  },
-
-  arrowText: {
-    fontSize: 20,
-    color: '#6366F1',
+  title: { ...t.label, color: colors.textSecondary },
+  action: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  actionText: {
+    fontFamily: 'Ubuntu_500Medium',
+    fontSize: 13,
+    color: colors.lavenderDeep,
   },
 });
