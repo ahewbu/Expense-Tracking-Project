@@ -165,7 +165,6 @@ async def voice_transaction(
 # === ЭНДПОИНТ: Сквозной процесс (парсинг + сохранение) ===
 @router.post(
     "/parse-and-save",
-    response_model=TransactionResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Распарсить текст и сохранить транзакцию",
     description="Принимает текст, парсит через LLM, маппит категорию и сохраняет транзакцию в БД."
@@ -176,10 +175,20 @@ async def parse_and_save_transaction(
     current_user: User = Depends(get_current_user)
 ):
     try:
-        # 1. Вызываем LLM-адаптер
-        parsed_data = await parse_expense_text(payload.text)
+        # 1. Получаем категории пользователя из БД
+        user_categories_db = db.query(Category).filter(
+            Category.user_id == current_user.id
+        ).all()
+        category_names = [cat.name for cat in user_categories_db]
         
-        # 2. ПУНКТ 1: Разрешаем amount=0 при сбое LLM (fallback)
+        # Если у пользователя почему-то нет категорий, добавим "Прочее" как fallback
+        if "Прочее" not in category_names:
+            category_names.append("Прочее")
+
+        # 2. Вызываем LLM-адаптер, передавая список категорий
+        parsed_data = await parse_expense_text(payload.text, category_names)
+        
+        # 3. ПУНКТ 1: Разрешаем amount=0 при сбое LLM (fallback)
         is_fallback = parsed_data.description.startswith("[Сбой")
         if parsed_data.amount is None or (parsed_data.amount <= 0 and not is_fallback):
             raise HTTPException(
@@ -187,19 +196,29 @@ async def parse_and_save_transaction(
                 detail="Сумма не распознана или некорректна. Пожалуйста, укажите сумму расхода."
             )
         
-        # 3. Маппим категорию (находим или создаём)
-        category = get_or_create_category_by_name(db, parsed_data.category.value, current_user.id)
+        # 4. Находим категорию в БД
+        category = db.query(Category).filter(
+            Category.name == parsed_data.category,
+            Category.user_id == current_user.id
+        ).first()
         
-        # 4. Обрабатываем дату
+        # Если категория не найдена (например, ИИ вернул "Прочее", а её нет), создаём "Прочее"
+        if not category:
+            category = Category(name="Прочее", user_id=current_user.id, icon="")
+            db.add(category)
+            db.commit()
+            db.refresh(category)
+        
+        # 5. Обрабатываем дату
         transaction_date = datetime.now()
         if parsed_data.date:
             try:
-                parsed_date = datetime.strptime(parsed_data.date, "%Y-%m-%d").date()
-                transaction_date = datetime.combine(parsed_date, datetime.now().time())
+                parsed_date = datetime.strptime(parsed_data.date, "%Y-%m-%d")
+                transaction_date = parsed_date.replace(tzinfo=transaction_date.tzinfo)
             except ValueError:
                 pass
         
-        # 5. Создаём транзакцию в БД
+        # 6. Создаём транзакцию в БД
         new_transaction = Transaction(
             user_id=current_user.id,
             amount=parsed_data.amount,
@@ -215,25 +234,27 @@ async def parse_and_save_transaction(
         db.commit()
         db.refresh(new_transaction)
         
-        # ==========================================================
-        # ИСПРАВЛЕНИЕ: Явно собираем Pydantic-модель для ответа
-        # ==========================================================
-        return TransactionResponse(
-            id=new_transaction.id,
-            user_id=new_transaction.user_id,
-            amount=new_transaction.amount,
-            currency=new_transaction.currency,
-            category_id=new_transaction.category_id,
-            category_name=category.name,  # <--- БЕРЁМ ИМЯ ИЗ ОБЪЕКТА КАТЕГОРИИ
-            description=new_transaction.description,
-            source=new_transaction.source,
-            transaction_date=new_transaction.transaction_date,
-            status=new_transaction.status,
-            created_at=new_transaction.created_at
-        )
-        # ==========================================================
-    
+        # 7. Собираем ответ (добавляем мета-информацию для фронта)
+        return {
+            "transaction": TransactionResponse(
+                id=new_transaction.id,
+                user_id=new_transaction.user_id,
+                amount=float(new_transaction.amount),  # Преобразуем Decimal в float для Pydantic
+                currency=new_transaction.currency,
+                category_id=new_transaction.category_id,
+                category_name=category.name,
+                description=new_transaction.description,
+                source=new_transaction.source,
+                transaction_date=new_transaction.transaction_date,
+                status=new_transaction.status,
+                created_at=new_transaction.created_at
+            ),
+            "category_match": parsed_data.category_match,
+            "suggested_new_category": parsed_data.suggested_new_category
+        }
+        
     except HTTPException:
+        # Пробрасываем HTTP-исключения как есть
         raise
     except ValueError as e:
         raise HTTPException(
