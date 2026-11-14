@@ -6,6 +6,7 @@ import httpx
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
+from typing import List
 
 # Настраиваем базовый уровень логирования для вывода в консоль
 logging.basicConfig(
@@ -64,66 +65,62 @@ async def get_gigachat_token() -> str:
         raise
 
 
-async def parse_expense_text(text: str) -> TransactionParseResponse:
+async def parse_expense_text(text: str, user_categories: List[str]) -> TransactionParseResponse:
     """
     Отправляет текст в GigaChat и возвращает распарсенную транзакцию.
+    user_categories — список названий категорий пользователя из БД.
     """
     logger.info(f"Начало парсинга текста: '{text[:50]}...'")
     
     try:
         # 1. Загружаем промпт из файла
-        logger.debug("Загрузка промпта из файла")
         prompt_path = Path(__file__).parent.parent / "prompts" / "expense_parser_v1.txt"
         with open(prompt_path, "r", encoding="utf-8") as f:
             system_prompt = f.read()
-        logger.debug("Промпт успешно загружен")
-        
-        # 2. Динамически подставляем текущую дату вместо заглушки
+
+        # 2. Подставляем данные через .replace()
         today = datetime.now().strftime("%Y-%m-%d")
-        if "Текущая дата:" in system_prompt:
-            system_prompt = system_prompt.split("Текущая дата:")[0] + f"Текущая дата: {today}"
-        else:
-            system_prompt += f"\nТекущая дата: {today}"
-        logger.debug(f"Текущая дата в промпте: {today}")
+        categories_list = ", ".join([f'"{cat}"' for cat in user_categories])
         
+        final_prompt = system_prompt
+        final_prompt = final_prompt.replace("{user_categories}", categories_list)
+        final_prompt = final_prompt.replace("{current_date}", today)
+
         # 3. Получаем токен
-        logger.debug("Получение токена GigaChat")
         token = await get_gigachat_token()
-        
+
         # 4. Формируем запрос к GigaChat
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
             "Authorization": f"Bearer {token}"
         }
+        
         payload = {
             "model": "GigaChat",
             "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": text}
+                {"role": "system", "content": final_prompt},
+                {"role": "user", "content": f"Ввод: \"{text}\"\nДоступные категории: {categories_list}\nВывод:"}
             ],
             "temperature": 0.1,
             "max_tokens": 300
         }
-        logger.debug(f"Отправка запроса в GigaChat (модель: GigaChat)")
-        
+
         # 5. Делаем запрос
         async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
             response = await client.post(GIGACHAT_CHAT_URL, headers=headers, json=payload)
             response.raise_for_status()
             result = response.json()
-        logger.info("Ответ от GigaChat получен успешно")
-        
+
         # 6. Извлекаем сырой текст ответа
         raw_content = result["choices"][0]["message"]["content"]
-        logger.debug(f"Raw LLM response: {raw_content}")
-        
-        # === ЗАМЕЧАНИЕ 4: MOCK-режим для тестирования ошибок парсинга ===
+
+        # === MOCK-режим для тестирования ошибок парсинга JSON ===
         if MOCK_LLM_BAD_JSON:
             logger.warning("MOCK_LLM_BAD_JSON активирован - симуляция невалидного JSON")
             raw_content = "{ это невалидный JSON"
-        
-        # 7. Очистка от markdown-оберток (защита от непослушной модели)
+
+        # 7. Очистка от markdown-оберток
         cleaned_content = raw_content.strip()
         if cleaned_content.startswith("```json"):
             cleaned_content = cleaned_content[7:]
@@ -132,43 +129,45 @@ async def parse_expense_text(text: str) -> TransactionParseResponse:
         if cleaned_content.endswith("```"):
             cleaned_content = cleaned_content[:-3]
         cleaned_content = cleaned_content.strip()
-        
-        # 8. Парсинг JSON и валидация через Pydantic (схема Полины)
+
+        # 8. Парсинг JSON и валидация через Pydantic
         try:
             data = json.loads(cleaned_content)
-            logger.info("JSON успешно распаршен")
-            # ВАЖНО: В схеме Полины в Enum могли затесаться пробелы (например, "Еда "). 
-            # На всякий случай очищаем строку категории от пробелов перед валидацией.
+            
+            # Очищаем строки от пробелов
             if "category" in data and isinstance(data["category"], str):
                 data["category"] = data["category"].strip()
-            logger.info("Валидация данных через Pydantic успешна")
+            if "suggested_new_category" in data and isinstance(data["suggested_new_category"], str):
+                data["suggested_new_category"] = data["suggested_new_category"].strip()
+                
             return TransactionParseResponse(**data)
+        
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON from LLM: {cleaned_content}", exc_info=True)
             raise ValueError(f"LLM вернул невалидный JSON: {e}")
         except Exception as e:
             logger.error(f"Validation error: {e}", exc_info=True)
             raise ValueError(f"Ошибка валидации ответа LLM: {e}")
-            
+    
     except httpx.HTTPError as e:
         logger.error(f"Сбой сети при запросе к GigaChat: {e}", exc_info=True)
-        logger.warning("Активирован FALLBACK-режим: возвращаем транзакцию со статусом pending (валидация пропущена)")
-        # Используем model_construct, чтобы обойти строгий валидатор amount > 0
         return TransactionParseResponse.model_construct(
             amount=0.0,
-            category=CategoryName.OTHER,
+            category="Прочее",
             date=None,
-            description=f"[Сбой сети] {text[:50]}"
+            description=f"[Сбой сети] {text[:50]}",
+            category_match="unknown",
+            suggested_new_category=None
         )
     except Exception as e:
-        # Ловим вообще всё остальное, чтобы гарантировать, что приложение не упадёт с 500
         logger.error(f"Неожиданная критическая ошибка в LLM-адаптере: {e}", exc_info=True)
-        logger.warning("Активирован FALLBACK-режим из-за непредвиденной ошибки")
         return TransactionParseResponse.model_construct(
             amount=0.0,
-            category=CategoryName.OTHER,
+            category="Прочее",
             date=None,
-            description=f"[Сбой системы] {text[:50]}"
+            description=f"[Сбой системы] {text[:50]}",
+            category_match="unknown",
+            suggested_new_category=None
         )
 
 
@@ -265,6 +264,97 @@ async def generate_expense_insights(transactions: list, start_date: str, end_dat
     except httpx.RequestError as e:
         logger.error(f"Сбой сети при запросе инсайтов: {e}", exc_info=True)
         raise ValueError("Не удалось связаться с AI-аналитиком. Проверьте подключение к интернету.")
+    except Exception as e:
+        logger.error(f"Ошибка при генерации инсайтов: {e}", exc_info=True)
+        raise ValueError("Произошла внутренняя ошибка при анализе данных.")
+
+async def generate_expense_insights_json(
+    total: float,
+    mandatory_total: float,
+    mandatory_ratio: float,
+    optional_total: float,
+    optional_ratio: float,
+    health_label: str,
+    savings_base: float,
+    transactions_text: str,
+    start_date: str,
+    end_date: str
+) -> dict:
+    """
+    Генерирует JSON-инсайты с использованием контекста от бизнес-логики.
+    """
+    logger.info(f"📊 Начало генерации JSON-инсайтов за период {start_date} - {end_date}")
+    
+    # 1. Загружаем промпт
+    prompt_path = Path(__file__).parent.parent / "prompts" / "insights_analyzer_v1.txt"
+    try:
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            system_prompt = f.read()
+    except FileNotFoundError:
+        logger.error("Файл промпта insights_analyzer_v1.txt не найден")
+        raise ValueError("Ошибка конфигурации: промпт для инсайтов не найден")
+
+    # 2. Подставляем данные через .replace() (чтобы не конфликтовать с JSON в промпте)
+    final_prompt = system_prompt
+    final_prompt = final_prompt.replace("{start_date}", start_date)
+    final_prompt = final_prompt.replace("{end_date}", end_date)
+    final_prompt = final_prompt.replace("{total}", f"{total:.0f}")
+    final_prompt = final_prompt.replace("{mandatory_total}", f"{mandatory_total:.0f}")
+    final_prompt = final_prompt.replace("{mandatory_ratio}", f"{mandatory_ratio:.1f}")
+    final_prompt = final_prompt.replace("{optional_total}", f"{optional_total:.0f}")
+    final_prompt = final_prompt.replace("{optional_ratio}", f"{optional_ratio:.1f}")
+    final_prompt = final_prompt.replace("{health_label}", health_label)
+    final_prompt = final_prompt.replace("{savings_base}", f"{savings_base:.0f}")
+    final_prompt = final_prompt.replace("{transactions_text}", transactions_text.strip())
+
+    # 3. Получаем токен
+    token = await get_gigachat_token()
+    
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token}"
+    }
+    
+    # 4. Запрос к GigaChat (БЕЗ response_format — GigaChat может его не поддерживать)
+    payload = {
+        "model": "GigaChat",
+        "messages": [
+            {"role": "system", "content": "Ты заботливый финансовый консультант."},
+            {"role": "user", "content": final_prompt}
+        ],
+        "temperature": 0.5,
+        "max_tokens": 1000
+    }
+    
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+            response = await client.post(GIGACHAT_CHAT_URL, headers=headers, json=payload)
+            response.raise_for_status()
+            result = response.json()
+        
+        # 5. Извлекаем и парсим JSON
+        raw_content = result["choices"][0]["message"]["content"].strip()
+        
+        # Очистка от markdown-оберток (на всякий случай)
+        if raw_content.startswith("```json"):
+            raw_content = raw_content[7:]
+        if raw_content.startswith("```"):
+            raw_content = raw_content[3:]
+        if raw_content.endswith("```"):
+            raw_content = raw_content[:-3]
+        raw_content = raw_content.strip()
+        
+        insights_data = json.loads(raw_content)
+        logger.info("✅ JSON-инсайты успешно сгенерированы")
+        return insights_data
+        
+    except httpx.RequestError as e:
+        logger.error(f"Сбой сети при запросе инсайтов: {e}", exc_info=True)
+        raise ValueError("Не удалось связаться с AI-аналитиком.")
+    except json.JSONDecodeError as e:
+        logger.error(f"LLM вернул невалидный JSON: {raw_content}", exc_info=True)
+        raise ValueError("AI вернул некорректный формат ответа.")
     except Exception as e:
         logger.error(f"Ошибка при генерации инсайтов: {e}", exc_info=True)
         raise ValueError("Произошла внутренняя ошибка при анализе данных.")

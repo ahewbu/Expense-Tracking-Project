@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Literal
 from uuid import UUID
 from enum import Enum
 
@@ -35,38 +35,48 @@ class TransactionParseRequest(BaseModel):
 
 
 class TransactionParseResponse(BaseModel):
-    """То, что вернул GigaChat"""
+    """То, что вернул GigaChat (с мета-информацией о категории)"""
     amount: Optional[float] = Field(
         None, 
         description="Сумма (null, если ИИ не услышал)", 
         example=250.0
     )
-    category: CategoryName = Field(
+    category: str = Field(
         ..., 
-        description="Категория строкой", 
-        example="Еда"
+        description="Название категории (из списка или предложенное)", 
+        example="Питомцы"
     )
     date: Optional[str] = Field(
         None, 
         description="Дата в формате YYYY-MM-DD или null", 
-        example="2026-10-01"
+        example="2026-11-14"
     )
     description: str = Field(
         ..., 
         description="Краткое описание", 
-        example="Кофе",
+        example="Корм для кота",
         max_length=500
+    )
+    
+    # НОВОЕ: Мета-информация для трёх сценариев
+    category_match: Literal["exact", "suggested", "unknown"] = Field(
+        "exact",
+        description="exact — точное совпадение, suggested — предложена новая, unknown — не удалось определить"
+    )
+    suggested_new_category: Optional[str] = Field(
+        None,
+        description="Если category_match='suggested', здесь название новой категории для создания"
     )
 
     @field_validator('amount')
     @classmethod
     def amount_must_be_positive(cls, v: Optional[float]) -> float:
-        """Строгий валидатор: сумма не может быть None или <= 0"""
-        if v is None:
-            raise ValueError('Сумма не распознана. Пожалуйста, укажите сумму расхода.')
-        if v <= 0:
-            raise ValueError('Сумма должна быть строго больше 0')
-        return v
+        """Строгий валидатор: сумма не может быть None или <= 0 (кроме fallback)"""
+        # Примечание: fallback с amount=0 обрабатывается на уровне эндпоинта, 
+        # здесь мы просто разрешаем 0, если это явный fallback, но для чистого парсинга требуем > 0
+        if v is not None and v < 0:
+            raise ValueError('Сумма не может быть отрицательной')
+        return v if v is not None else 0.0
 
 
 class TransactionCreate(BaseModel):

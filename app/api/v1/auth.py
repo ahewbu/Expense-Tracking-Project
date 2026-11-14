@@ -11,6 +11,7 @@ from app.core.security import (
     create_access_token,
     get_current_user,
 )
+from app.core.default_categories import create_default_categories
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -39,6 +40,8 @@ async def register(user_data: UserRegister, db: Session = Depends(get_db)):
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+
+    create_default_categories(db, new_user.id)
     
     return new_user
 
