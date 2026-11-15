@@ -3,6 +3,7 @@ import json
 import uuid
 import logging
 import httpx
+import re  # <-- ДОБАВЛЕНО для пуленепробиваемого парсинга
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -10,7 +11,7 @@ from typing import List
 
 # Настраиваем базовый уровень логирования для вывода в консоль
 logging.basicConfig(
-    level=logging.INFO,  # Показывать INFO, WARNING, ERROR
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
@@ -69,6 +70,7 @@ async def parse_expense_text(text: str, user_categories: List[str]) -> Transacti
     """
     Отправляет текст в GigaChat и возвращает распарсенную транзакцию.
     user_categories — список названий категорий пользователя из БД.
+    Поддерживает 3 сценария: exact / suggested / unknown.
     """
     logger.info(f"Начало парсинга текста: '{text[:50]}...'")
     
@@ -78,7 +80,7 @@ async def parse_expense_text(text: str, user_categories: List[str]) -> Transacti
         with open(prompt_path, "r", encoding="utf-8") as f:
             system_prompt = f.read()
 
-        # 2. Подставляем данные через .replace()
+        # 2. Подставляем данные через .replace() (безопаснее, чем .format)
         today = datetime.now().strftime("%Y-%m-%d")
         categories_list = ", ".join([f'"{cat}"' for cat in user_categories])
         
@@ -175,6 +177,7 @@ async def generate_expense_insights(transactions: list, start_date: str, end_dat
     """
     Генерирует инсайты на основе списка транзакций за период.
     Возвращает dict с полями short_insight и full_analysis.
+    (СТАРАЯ ВЕРСИЯ — оставлена для обратной совместимости)
     """
     logger.info(f"📊 Начало генерации инсайтов за период {start_date} - {end_date}")
     
@@ -268,6 +271,7 @@ async def generate_expense_insights(transactions: list, start_date: str, end_dat
         logger.error(f"Ошибка при генерации инсайтов: {e}", exc_info=True)
         raise ValueError("Произошла внутренняя ошибка при анализе данных.")
 
+
 async def generate_expense_insights_json(
     total: float,
     mandatory_total: float,
@@ -282,6 +286,7 @@ async def generate_expense_insights_json(
 ) -> dict:
     """
     Генерирует JSON-инсайты с использованием контекста от бизнес-логики.
+    (НОВАЯ ВЕРСИЯ от Анны — используется в insights.py)
     """
     logger.info(f"📊 Начало генерации JSON-инсайтов за период {start_date} - {end_date}")
     
@@ -316,14 +321,14 @@ async def generate_expense_insights_json(
         "Authorization": f"Bearer {token}"
     }
     
-    # 4. Запрос к GigaChat (БЕЗ response_format — GigaChat может его не поддерживать)
+    # 4. Запрос к GigaChat
     payload = {
         "model": "GigaChat",
         "messages": [
-            {"role": "system", "content": "Ты заботливый финансовый консультант."},
+            {"role": "system", "content": "Ты заботливый финансовый консультант. Отвечай СТРОГО валидным JSON. Никаких вступлений, никаких пояснений вне фигурных скобок {}."},
             {"role": "user", "content": final_prompt}
         ],
-        "temperature": 0.5,
+        "temperature": 0.3,  # Снизили для более предсказуемого JSON
         "max_tokens": 1000
     }
     
@@ -333,28 +338,34 @@ async def generate_expense_insights_json(
             response.raise_for_status()
             result = response.json()
         
-        # 5. Извлекаем и парсим JSON
+        # 5. Извлекаем сырой текст
         raw_content = result["choices"][0]["message"]["content"].strip()
+        logger.info(f"Raw LLM response (first 100 chars): {raw_content[:100]}")
         
-        # Очистка от markdown-оберток (на всякий случай)
-        if raw_content.startswith("```json"):
-            raw_content = raw_content[7:]
-        if raw_content.startswith("```"):
-            raw_content = raw_content[3:]
-        if raw_content.endswith("```"):
-            raw_content = raw_content[:-3]
-        raw_content = raw_content.strip()
+        # === ПУЛЕНЕПРОБИВАЕМЫЙ ПАРСИНГ JSON ===
+        # Ищем всё, что начинается с { и заканчивается на }, игнорируя любой текст до/после
+        json_match = re.search(r'\{.*\}', raw_content, re.DOTALL)
         
-        insights_data = json.loads(raw_content)
-        logger.info("✅ JSON-инсайты успешно сгенерированы")
-        return insights_data
+        if json_match:
+            cleaned = json_match.group(0)
+        else:
+            # Fallback: если фигурных скобок нет, пробуем старую очистку
+            cleaned = raw_content.replace("```json", "").replace("```", "").strip()
+            logger.warning("Фигурные скобки не найдены, применена базовая очистка")
         
+        try:
+            insights_data = json.loads(cleaned)
+            logger.info("✅ JSON-инсайты успешно сгенерированы и распаршены")
+            return insights_data
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"LLM вернул невалидный JSON. Ошибка: {e}")
+            logger.error(f"Проблемный контент: {cleaned[:500]}...")
+            raise ValueError("AI вернул некорректный формат ответа.")
+            
     except httpx.RequestError as e:
         logger.error(f"Сбой сети при запросе инсайтов: {e}", exc_info=True)
         raise ValueError("Не удалось связаться с AI-аналитиком.")
-    except json.JSONDecodeError as e:
-        logger.error(f"LLM вернул невалидный JSON: {raw_content}", exc_info=True)
-        raise ValueError("AI вернул некорректный формат ответа.")
     except Exception as e:
         logger.error(f"Ошибка при генерации инсайтов: {e}", exc_info=True)
         raise ValueError("Произошла внутренняя ошибка при анализе данных.")
