@@ -1,9 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi.errors import RateLimitExceeded
+
 from app.api.v1.transactions import router as transactions_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.stats import router as stats_router
 from app.api.v1.insights import router as insights_router
+from app.core.rate_limiter import limiter, rate_limit_exceeded_handler
 
 app = FastAPI(
     title="Геленджик 2007 API",
@@ -21,6 +24,10 @@ app.add_middleware(
     allow_methods=["*"],  # Разрешаем GET, POST, PATCH и т.д.
     allow_headers=["*"],
 )
+
+# Подключаем rate limiter
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 # Подключаем роутеры
 app.include_router(auth_router, prefix="/api/v1")

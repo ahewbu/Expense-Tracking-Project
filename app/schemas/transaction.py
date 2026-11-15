@@ -1,3 +1,4 @@
+import re
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 from typing import Optional, List, Literal
@@ -106,6 +107,8 @@ class TransactionCreate(BaseModel):
     def amount_must_be_positive(cls, v: float) -> float:
         if v <= 0:
             raise ValueError('Сумма должна быть больше 0')
+        if v > 1_000_000:
+            raise ValueError('Сумма не может превышать 1 000 000')
         return v
 
 
@@ -122,6 +125,8 @@ class TransactionUpdate(BaseModel):
     def amount_must_be_positive(cls, v: Optional[float]) -> Optional[float]:
         if v is not None and v <= 0:
             raise ValueError('Сумма должна быть больше 0')
+        if v > 1_000_000:
+            raise ValueError('Сумма не может превышать 1 000 000')
         return v
     
     @field_validator('status')
@@ -162,6 +167,26 @@ class CategoryResponse(BaseModel):
 class CategoryCreate(BaseModel):
     name: str = Field(..., example="Еда", min_length=1, max_length=100)
     icon: Optional[str] = Field(None, example="", max_length=50)
+
+    @field_validator('name')
+    @classmethod
+    def name_must_be_valid(cls, v):
+        v = v.strip()
+        if not v:
+            raise ValueError('Название категории не может быть пустым')
+        # Запрет опасных символов (защита от XSS/SQL-инъекций)
+        if re.search(r'[<>\'";]', v):
+            raise ValueError('Название содержит недопустимые символы')
+        return v
+
+    @field_validator('icon')
+    @classmethod
+    def icon_must_be_safe(cls, v):
+        if v is None:
+            return v
+        if re.search(r'[<>\'";]', v):
+            raise ValueError('Иконка содержит недопустимые символы')
+        return v.strip()[:50]
 
 
 class CategoryStat(BaseModel):
