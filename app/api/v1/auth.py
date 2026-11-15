@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from app.core.security import (
     get_current_user,
 )
 from app.core.default_categories import create_default_categories
+from app.core.rate_limiter import limiter 
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -21,9 +22,15 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
     response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Регистрация нового пользователя",
-    description="Создаёт нового пользователя с хешированным паролем."
+    description="Создаёт нового пользователя с хешированным паролем. Лимит: 10 в минуту."
 )
-async def register(user_data: UserRegister, db: Session = Depends(get_db)):
+@limiter.limit("10/minute") 
+async def register(
+    request: Request, 
+    user_data: UserRegister,
+    db: Session = Depends(get_db)
+):
+    """Регистрация нового пользователя. Лимит: 10 в минуту."""
     existing_user = db.query(User).filter(User.email == user_data.email).first()
     if existing_user:
         raise HTTPException(
@@ -50,17 +57,15 @@ async def register(user_data: UserRegister, db: Session = Depends(get_db)):
     "/login",
     response_model=TokenResponse,
     summary="Вход пользователя",
-    description="Возвращает JWT токен при успешной аутентификации."
+    description="Возвращает JWT токен при успешной аутентификации. Лимит: 5 попыток в минуту."
 )
+@limiter.limit("5/minute") 
 async def login(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
-    """
-    Вход пользователя через OAuth2 форму (совместимо со Swagger UI).
-    username = email пользователя
-    """
-    # Находим пользователя по email (который приходит в поле username)
+    """Вход пользователя через OAuth2 форму. Лимит: 5 в минуту."""
     user = db.query(User).filter(User.email == form_data.username).first()
     if not user:
         raise HTTPException(
@@ -69,7 +74,6 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Проверяем пароль
     if not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -77,7 +81,6 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Создаём токен
     access_token = create_access_token(data={"sub": str(user.id)})
     
     return {"access_token": access_token, "token_type": "bearer"}

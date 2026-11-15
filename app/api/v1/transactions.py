@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status, Depends, Query, UploadFile, File
+from fastapi import APIRouter, HTTPException, status, Depends, Query, UploadFile, File, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from typing import List, Optional
@@ -21,8 +21,12 @@ from app.services.llm_adapter import parse_expense_text
 from app.services.asr import transcribe_audio
 from app.core.security import get_current_user 
 
+from app.core.rate_limiter import limiter
+from app.core.sanitizer import sanitize_text
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/transactions", tags=["Transactions"])
+MAX_AUDIO_SIZE = 10 * 1024 * 1024
 
 
 # === ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: Найти или создать категорию по названию ===
@@ -50,7 +54,16 @@ def get_or_create_category_by_name(db: Session, category_name: str, user_id: UUI
 )
 async def parse_transaction(payload: TransactionParseRequest):
     try:
-        result = await parse_expense_text(payload.text)
+        # Санитизируем входной текст (защита от XSS)
+        sanitized_text = sanitize_text(payload.text)
+
+        # Стандартный набор категорий (эндпоинт без авторизации)
+        standard_categories = [
+            "Еда", "Транспорт", "Жилье", "Развлечения",
+            "Здоровье", "Одежда", "Связь", "Прочее"
+        ]
+
+        result = await parse_expense_text(sanitized_text, standard_categories)
         return result
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -64,11 +77,20 @@ async def parse_transaction(payload: TransactionParseRequest):
     summary="Транскрибация аудио в текст (ASR)"
 )
 async def transcribe_audio_endpoint(file: UploadFile = File(...)):
+    """Транскрибация аудио. Максимальный размер: 10 МБ."""
     if not file.content_type or not file.content_type.startswith("audio/"):
         raise HTTPException(status_code=400, detail="Файл должен быть аудиоформата")
     
+    audio_bytes = await file.read()
+    
+    # Проверка размера файла
+    if len(audio_bytes) > MAX_AUDIO_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Файл слишком большой. Максимальный размер: {MAX_AUDIO_SIZE // (1024*1024)} МБ"
+        )
+    
     try:
-        audio_bytes = await file.read()
         text = transcribe_audio(audio_bytes)
         return {"text": text}
     except Exception as e:
@@ -83,7 +105,9 @@ async def transcribe_audio_endpoint(file: UploadFile = File(...)):
     status_code=status.HTTP_201_CREATED,
     summary="Голосовой ввод: Аудио -> Текст -> Парсинг -> Сохранение",
 )
+@limiter.limit("10/minute")
 async def voice_transaction(
+    request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -92,9 +116,17 @@ async def voice_transaction(
     if not file.content_type or not file.content_type.startswith("audio/"):
         raise HTTPException(status_code=400, detail="Файл должен быть аудиоформата")
 
+    
     try:
-        # 1. ASR: аудио -> текст
+        
         audio_bytes = await file.read()
+        # Проверка размера файла (10 МБ)
+        if len(audio_bytes) > MAX_AUDIO_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Файл слишком большой. Максимальный размер: {MAX_AUDIO_SIZE // (1024*1024)} МБ"
+            )
+        # 1. ASR: аудио -> текст
         text = transcribe_audio(audio_bytes)
         logger.info(f"🎙 ASR распознал текст: '{text}'")
 
