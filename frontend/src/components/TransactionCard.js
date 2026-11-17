@@ -6,6 +6,7 @@ import { getCategoryIcon, getCategoryColor } from '../theme/icons';
 import { colors, radii } from '../theme/theme';
 
 export default function TransactionCard({ description, categoryName, date, amount, status, isReadyToConfirm }) {
+  // ВСЕГДА берём иконку из маппинга, игнорируем emoji из БД
   const iconName = getCategoryIcon(categoryName);
   const color = getCategoryColor(categoryName);
   const isPending = status === 'pending';

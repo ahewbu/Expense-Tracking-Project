@@ -1,45 +1,112 @@
-import { View, Text, ScrollView, StyleSheet, ActivityIndicator, Dimensions, TouchableOpacity } from 'react-native';
-import { PieChart } from 'react-native-chart-kit';
+import { View, Text, ScrollView, StyleSheet, ActivityIndicator, TouchableOpacity, Modal } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { getStatsSummary } from '../../api/transactions';
+import { getCategoryStyle } from '../../theme/icons';
+import { colors, radii, text as t } from '../../theme/theme';
+import DonutChart from '../../components/DonutChart';
+import ScrollableLegend from '../../components/ScrollableLegend';
 
-const screenWidth = Dimensions.get('window').width;
+const PERIOD_PRESETS = [
+  { id: 'week', label: 'Эта неделя', icon: 'calendar' },
+  { id: 'month', label: 'Этот месяц', icon: 'calendar' },
+  { id: 'last_month', label: 'Прошлый месяц', icon: 'calendar' },
+  { id: 'year', label: 'Этот год', icon: 'calendar' },
+  { id: 'all', label: 'Всё время', icon: 'time' },
+];
 
 export default function AnalyticsScreen() {
   const [stats, setStats] = useState(null);
+  const [prevStats, setPrevStats] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [period, setPeriod] = useState('month'); // 'week' | 'month' | 'all'
+  const [period, setPeriod] = useState('month');
+  const [calendarModal, setCalendarModal] = useState(false);
+
+  const dateRanges = useMemo(() => {
+    const now = new Date();
+    let currentStart, currentEnd, prevStart, prevEnd;
+    let label = '';
+
+    switch (period) {
+      case 'week': {
+        currentEnd = now;
+        currentStart = new Date(now);
+        currentStart.setDate(now.getDate() - 7);
+        prevEnd = new Date(currentStart);
+        prevEnd.setDate(currentStart.getDate() - 1);
+        prevStart = new Date(prevEnd);
+        prevStart.setDate(prevEnd.getDate() - 7);
+        label = 'Последние 7 дней';
+        break;
+      }
+      case 'month': {
+        currentStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        currentEnd = now;
+        prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        prevEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+        label = `${getMonthYearLabel(now)}`;
+        break;
+      }
+      case 'last_month': {
+        currentStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        currentEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+        prevStart = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+        prevEnd = new Date(now.getFullYear(), now.getMonth() - 1, 0);
+        label = `${getMonthYearLabel(currentStart)}`;
+        break;
+      }
+      case 'year': {
+        currentStart = new Date(now.getFullYear(), 0, 1);
+        currentEnd = now;
+        prevStart = new Date(now.getFullYear() - 1, 0, 1);
+        prevEnd = new Date(now.getFullYear() - 1, 11, 31);
+        label = `${now.getFullYear()} год`;
+        break;
+      }
+      case 'all': {
+        currentStart = new Date(2020, 0, 1);
+        currentEnd = now;
+        prevStart = null;
+        prevEnd = null;
+        label = 'Всё время';
+        break;
+      }
+      default:
+        currentStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        currentEnd = now;
+        prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        prevEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+        label = getMonthYearLabel(now);
+    }
+
+    return { currentStart, currentEnd, prevStart, prevEnd, label };
+  }, [period]);
 
   const loadStats = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const now = new Date();
-      let start;
-      
-      if (period === 'week') {
-        start = new Date(now);
-        start.setDate(now.getDate() - 7);
-      } else if (period === 'month') {
-        start = new Date(now.getFullYear(), now.getMonth(), 1);
-      } else {
-        start = new Date(2020, 0, 1); // "За всё время"
-      }
-
       const fmt = (d) =>
         `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-      const data = await getStatsSummary(fmt(start), fmt(now));
-      setStats(data);
+      const currentData = await getStatsSummary(fmt(dateRanges.currentStart), fmt(dateRanges.currentEnd));
+      setStats(currentData);
+
+      if (dateRanges.prevStart && dateRanges.prevEnd) {
+        const prevData = await getStatsSummary(fmt(dateRanges.prevStart), fmt(dateRanges.prevEnd));
+        setPrevStats(prevData);
+      } else {
+        setPrevStats(null);
+      }
     } catch (e) {
       console.error('Ошибка загрузки статистики:', e);
       setError('Не удалось загрузить статистику');
     } finally {
       setLoading(false);
     }
-  }, [period]);
+  }, [dateRanges]);
 
   useFocusEffect(
     useCallback(() => {
@@ -47,50 +114,54 @@ export default function AnalyticsScreen() {
     }, [loadStats])
   );
 
-  const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(amount);
-  };
+  const formatCurrency = (amount) =>
+    new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(amount);
 
-  // Цвета для секторов
-  const COLORS = ['#6366F1', '#F59E0B', '#10B981', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316'];
+  const changePercent = useMemo(() => {
+    if (!stats || !prevStats) return null;
+    const current = stats.total;
+    const prev = prevStats.total;
+    if (prev === 0) return null;
+    return ((current - prev) / prev) * 100;
+  }, [stats, prevStats]);
 
-  // Данные для PieChart
-  const chartData = stats?.by_category?.map((cat, index) => ({
-    name: cat.category_name,
-    amount: cat.total,
-    color: COLORS[index % COLORS.length],
-    legendFontColor: '#1C1917',
-    legendFontSize: 13,
-  })) || [];
+  const chartData = stats?.by_category?.map((cat) => {
+    const style = getCategoryStyle(cat.category_name);
+    return {
+      name: cat.category_name,
+      amount: cat.total,
+      color: style.color,
+    };
+  }) || [];
+
+  const total = stats?.total || 0;
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>Аналитика</Text>
-
-      {/* Переключатель периода */}
-      <View style={styles.periodSwitcher}>
-        {['week', 'month', 'all'].map((p) => (
-          <TouchableOpacity
-            key={p}
-            style={[styles.periodButton, period === p && styles.periodButtonActive]}
-            onPress={() => setPeriod(p)}
-          >
-            <Text style={[styles.periodText, period === p && styles.periodTextActive]}>
-              {p === 'week' ? 'Неделя' : p === 'month' ? 'Месяц' : 'Всё время'}
-            </Text>
+      {/* Заголовок периода */}
+      <View style={styles.header}>
+        <View style={styles.headerLeft}>
+          <Text style={styles.headerLabel}>Расходы за период</Text>
+          <TouchableOpacity style={styles.periodTitleRow} onPress={() => setCalendarModal(true)}>
+            <Text style={styles.periodTitle}>{dateRanges.label}</Text>
+            <Ionicons name="chevron-down" size={18} color={colors.textMuted} />
           </TouchableOpacity>
-        ))}
+        </View>
+        <TouchableOpacity style={styles.calendarButton} onPress={() => setCalendarModal(true)}>
+          <Ionicons name="calendar-outline" size={22} color={colors.lavenderDeep} />
+        </TouchableOpacity>
       </View>
 
       {loading && (
         <View style={styles.center}>
-          <ActivityIndicator size="large" color="#6366F1" />
-          <Text style={styles.loadingText}>Загружаем статистику...</Text>
+          <ActivityIndicator size="large" color={colors.lavender} />
+          <Text style={styles.loadingText}>Загружаем...</Text>
         </View>
       )}
 
       {error && !loading && (
         <View style={styles.center}>
+          <Ionicons name="alert-circle-outline" size={48} color={colors.terracotta} />
           <Text style={styles.errorText}>{error}</Text>
           <TouchableOpacity style={styles.retryButton} onPress={loadStats}>
             <Text style={styles.retryText}>Попробовать снова</Text>
@@ -100,57 +171,51 @@ export default function AnalyticsScreen() {
 
       {!loading && !error && stats && (
         <>
-          {/* Общая сумма */}
-          <View style={styles.totalCard}>
-            <Text style={styles.totalLabel}>Всего расходов за период</Text>
-            <Text style={styles.totalAmount}>{formatCurrency(stats.total)}</Text>
-            <Text style={styles.totalCount}>
-              {stats.by_category?.length || 0} {stats.by_category?.length === 1 ? 'категория' : 'категорий'}
-            </Text>
-          </View>
-
-          {/* PieChart */}
+          {/* Donut chart */}
           {chartData.length > 0 ? (
             <View style={styles.chartCard}>
-              <Text style={styles.chartTitle}>Распределение по категориям</Text>
-              <PieChart
+              <DonutChart
                 data={chartData}
-                width={screenWidth - 64}
-                height={220}
-                chartConfig={{
-                  backgroundColor: '#FFFFFF',
-                  backgroundGradientFrom: '#FFFFFF',
-                  backgroundGradientTo: '#FFFFFF',
-                  color: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
-                  labelColor: (opacity = 1) => `rgba(28, 25, 23, ${opacity})`,
-                }}
-                accessor="amount"
-                backgroundColor="transparent"
-                paddingLeft="16"
-                absolute
+                total={total}
+                centerLabel="Всего"
+                centerAmount={formatCurrency(total)}
+                changePercent={changePercent}
               />
+              
+              {/* Легенда */}
+              <ScrollableLegend data={chartData} total={total} />
             </View>
           ) : (
             <View style={styles.emptyCard}>
-              <Text style={styles.emptyText}>Нет данных за выбранный период</Text>
+              <Ionicons name="pie-chart-outline" size={48} color={colors.textMuted} />
+              <Text style={styles.emptyText}>Нет данных за этот период</Text>
               <Text style={styles.emptySubtext}>Добавь траты, чтобы увидеть аналитику</Text>
             </View>
           )}
 
-          {/* Список категорий с суммами */}
+          {/* Список категорий с прогресс-барами */}
           {chartData.length > 0 && (
             <View style={styles.listCard}>
-              <Text style={styles.listTitle}>Детализация</Text>
+              <Text style={styles.listTitle}>По категориям</Text>
               {chartData.map((cat, index) => {
-                const percent = stats.total > 0 ? ((cat.amount / stats.total) * 100).toFixed(1) : 0;
+                const percent = total > 0 ? (cat.amount / total) * 100 : 0;
                 return (
-                  <View key={index} style={styles.listItem}>
-                    <View style={[styles.colorDot, { backgroundColor: cat.color }]} />
-                    <View style={styles.listItemInfo}>
-                      <Text style={styles.listItemName}>{cat.name}</Text>
-                      <Text style={styles.listItemPercent}>{percent}%</Text>
+                  <View key={index} style={styles.categoryRow}>
+                    <View style={styles.categoryHeader}>
+                      <View style={styles.categoryInfo}>
+                        <Text style={styles.categoryName}>{cat.name}</Text>
+                        <Text style={styles.categoryPercent}>{percent.toFixed(1)}%</Text>
+                      </View>
+                      <Text style={styles.categoryAmount}>{formatCurrency(cat.amount)}</Text>
                     </View>
-                    <Text style={styles.listItemAmount}>{formatCurrency(cat.amount)}</Text>
+                    <View style={styles.progressBarBg}>
+                      <View
+                        style={[
+                          styles.progressBarFill,
+                          { width: `${percent}%`, backgroundColor: cat.color },
+                        ]}
+                      />
+                    </View>
                   </View>
                 );
               })}
@@ -158,100 +223,131 @@ export default function AnalyticsScreen() {
           )}
         </>
       )}
+
+      {/* Модалка выбора периода */}
+      <Modal visible={calendarModal} transparent animationType="slide" onRequestClose={() => setCalendarModal(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Выберите период</Text>
+              <TouchableOpacity onPress={() => setCalendarModal(false)}>
+                <Ionicons name="close" size={24} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.presetsList}>
+              {PERIOD_PRESETS.map((preset) => (
+                <TouchableOpacity
+                  key={preset.id}
+                  style={[styles.presetItem, period === preset.id && styles.presetItemActive]}
+                  onPress={() => {
+                    setPeriod(preset.id);
+                    setCalendarModal(false);
+                  }}
+                >
+                  <Ionicons
+                    name={preset.icon}
+                    size={20}
+                    color={period === preset.id ? colors.lavenderDeep : colors.textMuted}
+                  />
+                  <Text style={[styles.presetText, period === preset.id && styles.presetTextActive]}>
+                    {preset.label}
+                  </Text>
+                  {period === preset.id && (
+                    <Ionicons name="checkmark" size={20} color={colors.lavenderDeep} />
+                  )}
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
 
+const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+const getMonthYearLabel = (d) => `${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FAFAF9' },
+  container: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 24, paddingBottom: 100 },
-  title: { fontSize: 28, fontWeight: '700', color: '#1C1917', marginBottom: 20 },
 
-  periodSwitcher: {
-    flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 4,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: '#E7E5E4',
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 },
+  headerLeft: { flex: 1 },
+  headerLabel: { ...t.caption, color: colors.textMuted, marginBottom: 4 },
+  periodTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  periodTitle: { ...t.h1 },
+  calendarButton: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: colors.lavenderSoft,
+    justifyContent: 'center', alignItems: 'center',
   },
-  periodButton: {
-    flex: 1,
-    paddingVertical: 10,
-    alignItems: 'center',
-    borderRadius: 12,
-  },
-  periodButtonActive: { backgroundColor: '#6366F1' },
-  periodText: { fontSize: 14, fontWeight: '500', color: '#A8A29E' },
-  periodTextActive: { color: '#FFFFFF', fontWeight: '600' },
 
-  center: { alignItems: 'center', justifyContent: 'center', paddingVertical: 40 },
-  loadingText: { marginTop: 12, color: '#A8A29E', fontSize: 14 },
-  errorText: { color: '#DC2626', fontSize: 14, textAlign: 'center' },
-  retryButton: { marginTop: 16, backgroundColor: '#6366F1', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 12 },
+  center: { alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
+  loadingText: { marginTop: 12, color: colors.textMuted, fontSize: 14 },
+  errorText: { color: colors.terracotta, fontSize: 14, textAlign: 'center', marginTop: 12 },
+  retryButton: { marginTop: 16, backgroundColor: colors.lavender, paddingHorizontal: 20, paddingVertical: 10, borderRadius: radii.button },
   retryText: { color: '#FFFFFF', fontWeight: '600' },
 
-  totalCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
+  chartCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radii.card,
     padding: 24,
     marginBottom: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 3,
   },
-  totalLabel: { fontSize: 14, color: '#A8A29E', marginBottom: 8 },
-  totalAmount: { fontSize: 32, fontWeight: '700', color: '#1C1917' },
-  totalCount: { fontSize: 13, color: '#A8A29E', marginTop: 4 },
-
-  chartCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  chartTitle: { fontSize: 16, fontWeight: '600', color: '#1C1917', marginBottom: 12 },
 
   emptyCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
+    backgroundColor: colors.surface,
+    borderRadius: radii.card,
     padding: 40,
     alignItems: 'center',
     marginBottom: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  emptyText: { fontSize: 16, fontWeight: '600', color: '#1C1917' },
-  emptySubtext: { fontSize: 13, color: '#A8A29E', marginTop: 8 },
+  emptyText: { ...t.body, marginTop: 12, color: colors.text },
+  emptySubtext: { ...t.caption, color: colors.textMuted, marginTop: 4 },
 
   listCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
+    backgroundColor: colors.surface,
+    borderRadius: radii.card,
     padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 3,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  listTitle: { fontSize: 16, fontWeight: '600', color: '#1C1917', marginBottom: 12 },
-  listItem: {
+  listTitle: { ...t.h3, marginBottom: 16 },
+  categoryRow: { marginBottom: 16 },
+  categoryHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+  categoryInfo: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  categoryName: { ...t.body },
+  categoryPercent: { ...t.caption, color: colors.textMuted },
+  categoryAmount: { ...t.body, fontWeight: '600', color: colors.text },
+  progressBarBg: { height: 6, backgroundColor: colors.bg, borderRadius: 3, overflow: 'hidden' },
+  progressBarFill: { height: 6, borderRadius: 3 },
+
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modalContent: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radii.card,
+    borderTopRightRadius: radii.card,
+    padding: 24,
+    paddingBottom: 32,
+  },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  modalTitle: { ...t.h2 },
+  presetsList: { gap: 4 },
+  presetItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F5F5F4',
+    padding: 14,
+    borderRadius: radii.button,
+    gap: 12,
   },
-  colorDot: { width: 12, height: 12, borderRadius: 6, marginRight: 12 },
-  listItemInfo: { flex: 1 },
-  listItemName: { fontSize: 15, fontWeight: '500', color: '#1C1917' },
-  listItemPercent: { fontSize: 12, color: '#A8A29E', marginTop: 2 },
-  listItemAmount: { fontSize: 15, fontWeight: '600', color: '#F59E0B' },
+  presetItemActive: { backgroundColor: colors.lavenderSoft },
+  presetText: { flex: 1, ...t.body },
+  presetTextActive: { color: colors.lavenderDeep, fontWeight: '600' },
 });

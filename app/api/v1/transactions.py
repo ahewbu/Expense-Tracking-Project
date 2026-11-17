@@ -19,13 +19,13 @@ from app.schemas.transaction import (
 )
 from app.services.llm_adapter import parse_expense_text
 from app.services.asr import transcribe_audio
-from app.core.security import get_current_user 
-
+from app.core.security import get_current_user
 from app.core.rate_limiter import limiter
 from app.core.sanitizer import sanitize_text
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/transactions", tags=["Transactions"])
+
 MAX_AUDIO_SIZE = 10 * 1024 * 1024
 
 
@@ -56,13 +56,12 @@ async def parse_transaction(payload: TransactionParseRequest):
     try:
         # Санитизируем входной текст (защита от XSS)
         sanitized_text = sanitize_text(payload.text)
-
+        
         # Стандартный набор категорий (эндпоинт без авторизации)
         standard_categories = [
             "Еда", "Транспорт", "Жилье", "Развлечения",
             "Здоровье", "Одежда", "Связь", "Прочее"
         ]
-
         result = await parse_expense_text(sanitized_text, standard_categories)
         return result
     except ValueError as e:
@@ -97,11 +96,9 @@ async def transcribe_audio_endpoint(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Ошибка обработки аудио: {str(e)}")
 
 
-
 # === ЭНДПОИНТ 3: Голосовой ввод (Аудио -> Текст -> Парсинг -> СОХРАНЕНИЕ) ===
 @router.post(
     "/voice",
-    response_model=TransactionResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Голосовой ввод: Аудио -> Текст -> Парсинг -> Сохранение",
 )
@@ -115,36 +112,45 @@ async def voice_transaction(
     """Принимает аудио, распознаёт, парсит через LLM и СОХРАНЯЕТ транзакцию пользователя."""
     if not file.content_type or not file.content_type.startswith("audio/"):
         raise HTTPException(status_code=400, detail="Файл должен быть аудиоформата")
-
     
     try:
-        
         audio_bytes = await file.read()
+        
         # Проверка размера файла (10 МБ)
         if len(audio_bytes) > MAX_AUDIO_SIZE:
             raise HTTPException(
                 status_code=413,
                 detail=f"Файл слишком большой. Максимальный размер: {MAX_AUDIO_SIZE // (1024*1024)} МБ"
             )
+        
         # 1. ASR: аудио -> текст
         text = transcribe_audio(audio_bytes)
         logger.info(f"🎙 ASR распознал текст: '{text}'")
-
-        # 2. LLM: текст -> структура
-        parsed_data = await parse_expense_text(text)
+        
+        # 2. ПОЛУЧАЕМ КАТЕГОРИИ ПОЛЬЗОВАТЕЛЯ (ИСПРАВЛЕНИЕ: теперь передаем 2 аргумента)
+        user_categories_db = db.query(Category).filter(
+            Category.user_id == current_user.id
+        ).all()
+        category_names = [cat.name for cat in user_categories_db]
+        if "Прочее" not in category_names:
+            category_names.append("Прочее")
+            
+        # 3. LLM: текст -> структура
+        parsed_data = await parse_expense_text(text, category_names)
         logger.info(f"🤖 LLM распарсил: amount={parsed_data.amount}, category={parsed_data.category}")
-
-        # 3. Проверка суммы (как в parse-and-save)
+        
+        # 4. Проверка суммы
         if parsed_data.amount is None or parsed_data.amount <= 0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Сумма не распознана или некорректна. Повторите фразу с суммой.",
             )
-
-        # 4. Категория: найти или создать для текущего пользователя
-        category = get_or_create_category_by_name(db, parsed_data.category.value, current_user.id)
-
-        # 5. Дата: из ответа LLM или сегодняшняя
+        
+        # 5. Категория: найти или создать для текущего пользователя
+        # ИСПРАВЛЕНО: убрано .value, так как в схеме Полины category теперь str, а не Enum
+        category = get_or_create_category_by_name(db, parsed_data.category, current_user.id)
+        
+        # 6. Дата: из ответа LLM или сегодняшняя
         transaction_date = datetime.now()
         if parsed_data.date:
             try:
@@ -152,8 +158,8 @@ async def voice_transaction(
                 transaction_date = datetime.combine(parsed_date, datetime.now().time())
             except ValueError:
                 pass
-
-        # 6. Сохраняем транзакцию от имени авторизованного пользователя
+        
+        # 7. Сохраняем транзакцию от имени авторизованного пользователя
         new_transaction = Transaction(
             user_id=current_user.id,
             amount=parsed_data.amount,
@@ -168,8 +174,8 @@ async def voice_transaction(
         db.commit()
         db.refresh(new_transaction)
         logger.info(f"✅ Голосовая транзакция сохранена: {new_transaction.id}")
-
-        # 7. Возвращаем полный ответ с category_name (контракт как у parse-and-save)
+        
+        # 8. Возвращаем полный ответ с category_name
         return {
             "id": new_transaction.id,
             "user_id": new_transaction.user_id,
@@ -182,8 +188,10 @@ async def voice_transaction(
             "transaction_date": new_transaction.transaction_date,
             "status": new_transaction.status,
             "created_at": new_transaction.created_at,
+            "category_match": parsed_data.category_match,
+            "suggested_new_category": parsed_data.suggested_new_category,
         }
-
+        
     except HTTPException:
         raise
     except Exception as e:
@@ -194,7 +202,7 @@ async def voice_transaction(
         )
 
 
-# === ЭНДПОИНТ: Сквозной процесс (парсинг + сохранение) ===
+# === ЭНДПОИНТ 4: Сквозной процесс (парсинг + сохранение) ===
 @router.post(
     "/parse-and-save",
     status_code=status.HTTP_201_CREATED,
@@ -216,7 +224,7 @@ async def parse_and_save_transaction(
         # Если у пользователя почему-то нет категорий, добавим "Прочее" как fallback
         if "Прочее" not in category_names:
             category_names.append("Прочее")
-
+            
         # 2. Вызываем LLM-адаптер, передавая список категорий
         parsed_data = await parse_expense_text(payload.text, category_names)
         
@@ -298,6 +306,7 @@ async def parse_and_save_transaction(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Ошибка при создании транзакции: {str(e)}"
         )
+
 
 # === ЭНДПОИНТ 5: Создать транзакцию вручную ===
 @router.post(
@@ -525,16 +534,17 @@ async def create_category(
     return new_cat
 
 
-# === ЭНДПОИНТ 11: Удалить категорию ===
-@router.delete(
+# === ЭНДПОИНТ 10.5: Обновить категорию ===
+@router.patch(
     "/categories/{category_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Удалить категорию"
+    response_model=CategoryResponse,
+    summary="Обновить категорию"
 )
-async def delete_category(
+async def update_category(
     category_id: UUID,
+    payload: CategoryCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)  # <-- ЗАЩИТА
+    current_user: User = Depends(get_current_user)
 ):
     category = db.query(Category).filter(
         Category.id == category_id,
@@ -543,11 +553,74 @@ async def delete_category(
     
     if not category:
         raise HTTPException(status_code=404, detail="Категория не найдена")
+    
+    # Если имя изменилось — проверяем на дубликат
+    if payload.name != category.name:
+        existing = db.query(Category).filter(
+            Category.name == payload.name,
+            Category.user_id == current_user.id,
+            Category.id != category_id
+        ).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Категория с таким именем уже существует")
+    
+    category.name = payload.name
+    # СОХРАНЯЕМ ИКОНКУ (если передана)
+    if payload.icon is not None:
+        category.icon = payload.icon
+    db.commit()
+    db.refresh(category)
+    
+    return category
+
+
+# === ЭНДПОИНТ 11: Удалить категорию (с переносом трат в "Прочее") ===
+@router.delete(
+    "/categories/{category_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Удалить категорию"
+)
+async def delete_category(
+    category_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    category = db.query(Category).filter(
+        Category.id == category_id,
+        Category.user_id == current_user.id
+    ).first()
+    
+    if not category:
+        raise HTTPException(status_code=404, detail="Категория не найдена")
+    
+    # Проверяем, есть ли траты в этой категории
+    transactions_count = db.query(Transaction).filter(
+        Transaction.category_id == category_id,
+        Transaction.user_id == current_user.id
+    ).count()
+    
+    if transactions_count > 0:
+        # Находим или создаём категорию "Прочее"
+        other_category = db.query(Category).filter(
+            Category.name == "Прочее",
+            Category.user_id == current_user.id
+        ).first()
         
-    count = db.query(Transaction).filter(Transaction.category_id == category_id).count()
-    if count > 0:
-        raise HTTPException(status_code=400, detail=f"Категория используется в {count} транзакциях")
+        if not other_category:
+            other_category = Category(name="Прочее", user_id=current_user.id, icon="")
+            db.add(other_category)
+            db.commit()
+            db.refresh(other_category)
         
+        # Переносим все траты в "Прочее"
+        db.query(Transaction).filter(
+            Transaction.category_id == category_id,
+            Transaction.user_id == current_user.id
+        ).update({Transaction.category_id: other_category.id})
+        
+        db.commit()
+    
+    # Теперь удаляем категорию
     db.delete(category)
     db.commit()
     return None

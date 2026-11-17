@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { API_BASE_URL } from './config';
 import { getToken } from './auth';
+import { showToast } from '../utils/toast';
 
 // Создаём axios instance с базовыми настройками
 const api = axios.create({
@@ -18,12 +19,34 @@ api.interceptors.request.use(async (config) => {
 });
 
 // Обрабатываем 401 ошибки
+// Обрабатываем ошибки глобально
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
-      console.warn('Токен недействителен, требуется повторный вход');
+    const status = error.response?.status;
+    const url = error.config?.url || '';
+    const isLoginRequest = url.includes('/auth/login') || url.includes('/auth/register');
+
+    if (status === 401 && !isLoginRequest) {
+      // 401 на любом запросе КРОМЕ логина = сессия истекла
+      showToast('info', 'Сессия истекла. Войдите заново.');
     }
+    // На login/register 401 НЕ показываем — там свой текст в компоненте
+
+    if (status === 429) {
+      const retryAfter = error.response?.headers?.['retry-after'];
+      const seconds = retryAfter ? ` через ${retryAfter} сек` : '';
+      showToast('warning', `Слишком много попыток${seconds}. Подождите минуту.`);
+    }
+
+    if (status === 413) {
+      showToast('error', 'Файл слишком большой (макс. 10 МБ).');
+    }
+
+    if (!error.response) {
+      showToast('error', 'Нет подключения к интернету. Проверьте сеть.');
+    }
+
     return Promise.reject(error);
   }
 );
@@ -52,6 +75,16 @@ export const updateTransaction = async (id, data) => {
 
 export const createCategory = async (data) => {
   const response = await api.post('/api/v1/transactions/categories/', data);
+  return response.data;
+};
+
+export const updateCategory = async (id, data) => {
+  const response = await api.patch(`/api/v1/transactions/categories/${id}`, data);
+  return response.data;
+};
+
+export const deleteCategory = async (id) => {
+  const response = await api.delete(`/api/v1/transactions/categories/${id}`);
   return response.data;
 };
 
@@ -130,17 +163,22 @@ export const getStatsSummary = async (dateFrom, dateTo) => {
 // === ХЕЛПЕРЫ для новых контрактов ===
 
 export const normalizeTransactionResult = (raw) => {
-  if (raw && raw.transaction) {
+  if (!raw) return { transaction: null, categoryMatch: 'exact', suggestedNewCategory: null };
+
+  if (raw.transaction) {
+    // /parse-and-save — обёрнутый ответ
     return {
       transaction: raw.transaction,
       categoryMatch: raw.category_match || 'exact',
       suggestedNewCategory: raw.suggested_new_category || null,
     };
   }
+
+  // /voice — плоский ответ (теперь с category_match)
   return {
     transaction: raw,
-    categoryMatch: 'exact',
-    suggestedNewCategory: null,
+    categoryMatch: raw.category_match || 'exact',
+    suggestedNewCategory: raw.suggested_new_category || null,
   };
 };
 

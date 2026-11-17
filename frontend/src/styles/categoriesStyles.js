@@ -103,14 +103,6 @@ export const categoriesStyles = StyleSheet.create({
     elevation: 3,
   },
 
-  // Цветная полоска слева
-  categoryColorBar: {
-    width: SPACING.colorBarWidth,
-    height: 40,
-    borderRadius: SPACING.colorBarRadius,
-    marginRight: 12,
-  },
-
   categoryInfo: {
     flex: 1,
   },
@@ -201,6 +193,24 @@ export const categoriesStyles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+
+  // В styles/categoriesStyles.js добавь:
+  iconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+
+  deleteWarning: { 
+  ...t.body, 
+  color: colors.textMuted, 
+  textAlign: 'center', 
+  marginBottom: 20,
+  fontSize: 13,
+},
 });
 
 export { COLORS, SPACING, FONTS };

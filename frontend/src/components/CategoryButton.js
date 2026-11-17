@@ -1,48 +1,63 @@
-import { TouchableOpacity, Text, StyleSheet } from 'react-native';
+import { TouchableOpacity, Text, StyleSheet, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { getCategoryStyle } from '../theme/icons';
 
 /**
- * Компонент кнопки выбора категории.
- * 
- * Пропсы:
- * - name: строка (название категории)
- * - isActive: boolean (выбрана ли категория)
- * - onPress: функция (обработчик нажатия)
+ * Компонент кнопки выбора категории с иконкой.
  */
 export default function CategoryButton({ name, isActive, onPress }) {
+  const style = getCategoryStyle(name);
+
   return (
     <TouchableOpacity
       style={[styles.button, isActive && styles.buttonActive]}
       onPress={onPress}
     >
-      <Text style={[styles.text, isActive && styles.textActive]}>
-        {name}
-      </Text>
+      <View style={styles.content}>
+        <Ionicons
+          name={style.icon}
+          size={16}
+          color={isActive ? colors.lavenderDeep : colors.textMuted}
+          style={styles.icon}
+        />
+        <Text style={[styles.text, isActive && styles.textActive]}>
+          {name}
+        </Text>
+      </View>
     </TouchableOpacity>
   );
 }
 
+const colors = {
+  lavenderDeep: '#6366F1',
+  textMuted: '#A8A29E',
+};
+
 const styles = StyleSheet.create({
   button: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 20,
     backgroundColor: '#F5F5F4',
     borderWidth: 1,
     borderColor: '#E7E5E4',
   },
-
   buttonActive: {
     backgroundColor: '#EEF2FF',
-    borderColor: '#6366F1',
+    borderColor: colors.lavenderDeep,
   },
-
+  content: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  icon: { marginRight: 2 },
   text: {
     fontSize: 14,
-    color: '#57534E',
+    color: colors.textMuted,
   },
-
   textActive: {
-    color: '#6366F1',
+    color: colors.lavenderDeep,
     fontWeight: '600',
   },
 });

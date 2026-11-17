@@ -43,7 +43,8 @@ export default function HomeScreen() {
       );
       setTransactions(sorted.slice(0, 3));
     } catch (e) {
-      console.error('Ошибка загрузки трат:', e);
+      console.warn('Не удалось загрузить последние траты:', e.message);
+      setTransactions([]); // Показываем пустой список, а не крашим экран
     }
   }, []);
 
@@ -56,6 +57,7 @@ export default function HomeScreen() {
       
       const data = await getInsights(fmt(start), fmt(now));
       
+      // Если всё прошло успешно (200 OK)
       setFullInsightsData(data);
       
       if (data?.patterns && data.patterns.length > 0) {
@@ -63,15 +65,15 @@ export default function HomeScreen() {
       } else if (data?.financial_health?.explanation) {
         setPatterns([data.financial_health.explanation]);
       } else {
-        setPatterns([]);
+        //Fallback, если бэк вернул 200, но внутри нет ни паттернов, ни explanation
+        setPatterns(["Начни добавлять траты — ИИ проанализирует их"]);
       }
     } catch (e) {
-      console.error('Ошибка загрузки инсайтов:', e);
-      // ВАЖНО: выводим точную причину 400 ошибки от бэкенда
-      if (e.response?.data?.detail) {
-        console.error('🔴 Детали ошибки от бэка:', e.response.data.detail);
-      }
-      setPatterns([]);
+      // ГРАЦИОЗНЫЙ FALLBACK: Ловим 400, 401, 500 и сетевые ошибки
+      // Мы НЕ ломаем приложение, а просто показываем мягкое сообщение
+      console.warn('Инсайты временно недоступны:', e.message);
+      
+      setPatterns(['ИИ временно анализирует данные. Попробуйте обновить экран позже.']);
       setFullInsightsData(null);
     }
   }, []);

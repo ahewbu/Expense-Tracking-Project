@@ -1,8 +1,9 @@
-import { View, Text, TextInput, TouchableOpacity, Alert, StyleSheet } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
 import { useState } from 'react';
 import { router } from 'expo-router';
 import { login } from '../api/transactions';
 import { saveToken } from '../api/auth';
+import { showToast } from '../utils/toast';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -11,7 +12,7 @@ export default function LoginScreen() {
 
   const handleLogin = async () => {
     if (!email || !password) {
-      Alert.alert('Ошибка', 'Заполните все поля');
+      showToast('warning', 'Заполните все поля');
       return;
     }
 
@@ -19,16 +20,17 @@ export default function LoginScreen() {
     try {
       const data = await login(email, password);
       await saveToken(data.access_token);
-      
-      // Переходим на главный экран
       router.replace('/(tabs)');
     } catch (error) {
       console.error('Ошибка входа:', error);
-      Alert.alert(
-        'Ошибка входа',
+      // 429 — интерцептор уже показал тост, не дублируем
+      if (error.response?.status === 429) return;
+      showToast(
+        'error',
         error.response?.data?.detail || 'Неверный email или пароль'
       );
     } finally {
+      // ВСЕГДА сбрасываем isLoading — и при успехе, и при ошибке
       setIsLoading(false);
     }
   };
@@ -36,7 +38,7 @@ export default function LoginScreen() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Вход в приложение</Text>
-      
+
       <TextInput
         style={styles.input}
         placeholder="Email"
@@ -45,7 +47,7 @@ export default function LoginScreen() {
         keyboardType="email-address"
         autoCapitalize="none"
       />
-      
+
       <TextInput
         style={styles.input}
         placeholder="Пароль"
@@ -53,7 +55,7 @@ export default function LoginScreen() {
         onChangeText={setPassword}
         secureTextEntry
       />
-      
+
       <TouchableOpacity
         style={[styles.button, isLoading && styles.buttonDisabled]}
         onPress={handleLogin}
@@ -63,7 +65,7 @@ export default function LoginScreen() {
           {isLoading ? 'Вход...' : 'Войти'}
         </Text>
       </TouchableOpacity>
-      
+
       <TouchableOpacity onPress={() => router.push('/register')}>
         <Text style={styles.link}>Нет аккаунта? Зарегистрироваться</Text>
       </TouchableOpacity>

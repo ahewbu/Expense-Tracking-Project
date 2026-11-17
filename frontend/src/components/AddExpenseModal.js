@@ -1,200 +1,199 @@
-import {
-  Modal,
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  TouchableWithoutFeedback,
-  StyleSheet,
-  Platform,
-  ActivityIndicator,
-  KeyboardAvoidingView,
-} from 'react-native';
+import { View, Text, Modal, TouchableOpacity, TextInput, StyleSheet, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
-import { createTransaction } from '../api/transactions';
+import {
+  createTransaction,
+  createCategory,
+  updateTransaction,
+  normalizeTransactionResult,
+} from '../api/transactions';
+import { showToast } from '../utils/toast';
+import SuggestCategoryModal from './SuggestCategoryModal';
+import { colors, radii, text as t } from '../theme/theme';
 
-/**
- * Модальное окно добавления траты текстом.
- * Поверх главного экрана: фон затемняется (на вебе — с блюром).
- */
 export default function AddExpenseModal({ visible, onClose, onExpenseAdded }) {
-  const [text, setText] = useState('');
+  const [amount, setAmount] = useState('');
+  const [description, setDescription] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState('');
 
-  const reset = () => {
-    setText('');
-    setError('');
-    setIsLoading(false);
+  const [suggest, setSuggest] = useState({
+    visible: false,
+    suggestedName: '',
+    transactionId: null,
+  });
+
+  const resetForm = () => {
+    setAmount('');
+    setDescription('');
   };
 
-  const handleClose = () => {
-    if (isLoading) return; // не закрываем во время отправки
-    reset();
+  const finish = () => {
+    resetForm();
+    onExpenseAdded?.();
     onClose();
   };
 
-  const handleAdd = async () => {
-    if (!text.trim()) {
-      setError('Введите описание траты');
+  const handleSubmit = async () => {
+    if (!amount || !description) {
+      showToast('warning', 'Заполните все поля');
       return;
     }
+
     setIsLoading(true);
-    setError('');
     try {
-      await createTransaction(text.trim());
-      reset();
-      onExpenseAdded?.();
-      onClose();
+      const text = `${description} ${amount} рублей`;
+      const raw = await createTransaction(text);
+      const { transaction, categoryMatch, suggestedNewCategory } = normalizeTransactionResult(raw);
+
+      if (transaction?.description?.startsWith('[Сбой')) {
+        showToast('warning', 'ИИ недоступен. Трата сохранена — проверьте её вручную.');
+        resetForm();
+        onExpenseAdded?.();
+        onClose();
+        return;
+      }
+
+      if (categoryMatch === 'suggested' && suggestedNewCategory) {
+        setSuggest({
+          visible: true,
+          suggestedName: suggestedNewCategory,
+          transactionId: transaction.id,
+        });
+        return;
+      }
+
+      finish();
     } catch (e) {
-      console.error('Ошибка добавления:', e);
-      setError(e.response?.data?.detail || 'Не удалось добавить трату. Попробуйте ещё раз.');
+      console.error('Ошибка добавления траты:', e);
+      if (e.response?.status === 400) {
+        showToast('error', e.response.data?.detail || 'Не удалось распознать трату');
+      }
     } finally {
       setIsLoading(false);
     }
   };
 
+  const handleCreateCategory = async (name) => {
+    setIsLoading(true);
+    try {
+      const newCat = await createCategory({ name });
+      await updateTransaction(suggest.transactionId, { category_id: newCat.id });
+      setSuggest({ visible: false, suggestedName: '', transactionId: null });
+      finish();
+    } catch (e) {
+      console.error('Ошибка создания категории:', e);
+      if (e.response?.status === 400) {
+        const detail = e.response.data?.detail || '';
+        if (detail.includes('уже существует')) {
+          showToast('warning', 'Такая категория уже есть — введите другое имя');
+        } else {
+          showToast('error', detail || 'Не удалось создать категорию');
+        }
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSkip = () => {
+    setSuggest({ visible: false, suggestedName: '', transactionId: null });
+    resetForm();
+    onExpenseAdded?.();
+    onClose();
+  };
+
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={handleClose}>
-      <KeyboardAvoidingView
-        style={styles.wrapper}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        {/* Затемнённый фон (на вебе — с блюром). Клик по фону закрывает окно */}
-        <TouchableWithoutFeedback onPress={handleClose}>
-          <View style={styles.backdrop} />
-        </TouchableWithoutFeedback>
+    <>
+      <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+        <View style={styles.overlay}>
+          <View style={styles.modal}>
+            <View style={styles.header}>
+              <Text style={styles.title}>Новая трата</Text>
+              <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+                <Ionicons name="close" size={24} color={colors.text} />
+              </TouchableOpacity>
+            </View>
 
-        {/* Карточка поверх фона */}
-        <View style={styles.card}>
-          <View style={styles.header}>
-            <Text style={styles.title}>Новая трата</Text>
-            <TouchableOpacity onPress={handleClose} disabled={isLoading}>
-              <Ionicons name="close" size={24} color="#A8A29E" />
-            </TouchableOpacity>
-          </View>
+            <View style={styles.field}>
+              <Text style={styles.label}>Сумма</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="0"
+                value={amount}
+                onChangeText={setAmount}
+                keyboardType="numeric"
+              />
+            </View>
 
-          <Text style={styles.subtitle}>
-            Опиши трату своими словами — ИИ распознает сумму и категорию
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            placeholder="Например: кофе за 250 рублей"
-            value={text}
-            onChangeText={setText}
-            multiline
-            autoFocus
-          />
-
-          {error !== '' && <Text style={styles.error}>{error}</Text>}
-
-          <View style={styles.footer}>
-            <TouchableOpacity onPress={handleClose} disabled={isLoading}>
-              <Text style={styles.cancelText}>Отмена</Text>
-            </TouchableOpacity>
+            <View style={styles.field}>
+              <Text style={styles.label}>Описание</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Например: кофе в Старбаксе"
+                value={description}
+                onChangeText={setDescription}
+              />
+            </View>
 
             <TouchableOpacity
-              style={[styles.checkButton, isLoading && styles.checkButtonDisabled]}
-              onPress={handleAdd}
+              style={[styles.button, isLoading && styles.buttonDisabled]}
+              onPress={handleSubmit}
               disabled={isLoading}
             >
               {isLoading ? (
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
-                <Ionicons name="checkmark" size={28} color="#FFFFFF" />
+                <Text style={styles.buttonText}>Добавить</Text>
               )}
             </TouchableOpacity>
           </View>
         </View>
-      </KeyboardAvoidingView>
-    </Modal>
+      </Modal>
+
+      <SuggestCategoryModal
+        visible={suggest.visible}
+        suggestedName={suggest.suggestedName}
+        onConfirm={handleCreateCategory}
+        onSkip={handleSkip}
+      />
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  wrapper: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(28, 25, 23, 0.55)',
-    ...(Platform.OS === 'web'
-      ? { backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)' }
-      : null),
-  },
-  card: {
-    width: '88%',
-    maxWidth: 480,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modal: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radii.card,
+    borderTopRightRadius: radii.card,
     padding: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 10,
+    paddingBottom: 32,
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 24,
   },
-  title: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: '#1C1917',
-  },
-  subtitle: {
-    fontSize: 13,
-    color: '#A8A29E',
-    marginTop: 6,
-    marginBottom: 16,
-  },
+  title: { ...t.h2 },
+  closeButton: { padding: 4 },
+  field: { marginBottom: 16 },
+  label: { ...t.label, marginBottom: 8 },
   input: {
-    backgroundColor: '#FAFAF9',
-    borderRadius: 16,
-    padding: 14,
+    backgroundColor: colors.bg,
+    borderRadius: radii.button,
+    padding: 16,
     fontSize: 16,
     borderWidth: 1,
-    borderColor: '#E7E5E4',
-    minHeight: 90,
-    textAlignVertical: 'top',
+    borderColor: colors.border,
   },
-  error: {
-    color: '#DC2626',
-    fontSize: 13,
-    marginTop: 10,
-  },
-  footer: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
+  button: {
+    backgroundColor: colors.lavender,
+    paddingVertical: 16,
+    borderRadius: radii.button,
     alignItems: 'center',
-    marginTop: 20,
-    gap: 16,
+    marginTop: 8,
   },
-  cancelText: {
-    fontSize: 15,
-    color: '#A8A29E',
-    fontWeight: '500',
-  },
-  checkButton: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#6366F1',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#6366F1',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    elevation: 5,
-  },
-  checkButtonDisabled: {
-    opacity: 0.7,
-  },
+  buttonDisabled: { opacity: 0.7 },
+  buttonText: { fontFamily: 'Ubuntu_500Medium', fontSize: 16, color: '#FFFFFF' },
 });

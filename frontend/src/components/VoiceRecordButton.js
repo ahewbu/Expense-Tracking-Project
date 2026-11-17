@@ -1,9 +1,16 @@
-import { View, Text, TouchableOpacity, StyleSheet, Alert, Animated, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Animated, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useState, useEffect, useRef } from 'react';
 import { useAudioRecorder, RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync } from 'expo-audio';
-import { sendVoiceTransaction } from '../api/transactions';
+import {
+  sendVoiceTransaction,
+  createCategory,
+  updateTransaction,
+  normalizeTransactionResult,
+} from '../api/transactions';
+import { showToast } from '../utils/toast';
+import SuggestCategoryModal from './SuggestCategoryModal';
 import { colors, gradients, shadows } from '../theme/theme';
 
 export default function VoiceRecordButton({ onResult, disabled }) {
@@ -11,7 +18,9 @@ export default function VoiceRecordButton({ onResult, disabled }) {
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [duration, setDuration] = useState(0);
-  
+
+  const [suggest, setSuggest] = useState({ visible: false, suggestedName: '', transactionId: null });
+
   const ring1 = useRef(new Animated.Value(1)).current;
   const ring2 = useRef(new Animated.Value(1)).current;
   const btnScale = useRef(new Animated.Value(1)).current;
@@ -20,7 +29,7 @@ export default function VoiceRecordButton({ onResult, disabled }) {
   useEffect(() => {
     if (isRecording) {
       timerRef.current = setInterval(() => setDuration((d) => d + 1), 1000);
-      
+
       const makeRing = (anim, delay) =>
         Animated.loop(
           Animated.sequence([
@@ -31,29 +40,33 @@ export default function VoiceRecordButton({ onResult, disabled }) {
             ]),
           ])
         );
-      
+
       Animated.timing(btnScale, { toValue: 1.15, duration: 300, useNativeDriver: true }).start();
 
       const r1 = makeRing(ring1, 0);
       const r2 = makeRing(ring2, 900);
-      r1.start(); r2.start();
-      
+      r1.start();
+      r2.start();
+
       return () => {
         if (timerRef.current) clearInterval(timerRef.current);
-        r1.stop(); r2.stop();
-        ring1.setValue(1); ring2.setValue(1);
+        r1.stop();
+        r2.stop();
+        ring1.setValue(1);
+        ring2.setValue(1);
         Animated.timing(btnScale, { toValue: 1, duration: 300, useNativeDriver: true }).start();
       };
     }
   }, [isRecording]);
 
-  const formatDuration = (s) => `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
+  const formatDuration = (s) =>
+    `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
 
   const start = async () => {
     try {
       const { status } = await requestRecordingPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Нет доступа', 'Разреши доступ к микрофону в настройках');
+        showToast('warning', 'Разреши доступ к микрофону в настройках');
         return;
       }
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
@@ -62,7 +75,7 @@ export default function VoiceRecordButton({ onResult, disabled }) {
       setIsRecording(true);
     } catch (e) {
       console.error('Ошибка старта записи:', e);
-      Alert.alert('Ошибка', 'Не удалось начать запись');
+      showToast('error', 'Не удалось начать запись');
     }
   };
 
@@ -73,14 +86,62 @@ export default function VoiceRecordButton({ onResult, disabled }) {
       await audioRecorder.stop();
       const uri = audioRecorder.uri;
       if (!uri) throw new Error('Пустой URI записи');
-      const transaction = await sendVoiceTransaction(uri);
+
+      const raw = await sendVoiceTransaction(uri);
+      const { transaction, categoryMatch, suggestedNewCategory } = normalizeTransactionResult(raw);
+
+      // Сбой ИИ
+      if (transaction?.description?.startsWith('[Сбой')) {
+        showToast('warning', 'ИИ недоступен. Трата сохранена — проверьте её вручную.');
+        onResult?.(transaction);
+        return;
+      }
+
+      // ИИ предложил новую категорию
+      if (categoryMatch === 'suggested' && suggestedNewCategory) {
+        setSuggest({
+          visible: true,
+          suggestedName: suggestedNewCategory,
+          transactionId: transaction.id,
+        });
+        return;
+      }
+
+      // Обычный сценарий
       onResult?.(transaction);
     } catch (e) {
-      console.error('Ошибка голосового ввода:', e);
-      Alert.alert('Ошибка', 'Не удалось распознать речь. Попробуй ещё раз или введи текстом.');
+      console.error('❌ Ошибка голосового ввода:', e);
+      if (!e.response) {
+        showToast('error', 'Не удалось распознать речь. Попробуйте ещё раз.');
+      }
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const handleCreateCategory = async (name) => {
+    try {
+      const newCat = await createCategory({ name });
+      await updateTransaction(suggest.transactionId, { category_id: newCat.id });
+      setSuggest({ visible: false, suggestedName: '', transactionId: null });
+      // Тост убран — пользователь сам видит результат
+      onResult?.(newCat);
+    } catch (e) {
+      console.error('Ошибка создания категории:', e);
+      if (e.response?.status === 400) {
+        const detail = e.response.data?.detail || '';
+        if (detail.includes('уже существует')) {
+          showToast('warning', 'Такая категория уже есть — введите другое имя');
+        } else {
+          showToast('error', detail || 'Не удалось создать категорию');
+        }
+      }
+    }
+  };
+
+  const handleSkip = () => {
+    setSuggest({ visible: false, suggestedName: '', transactionId: null });
+    onResult?.(null);
   };
 
   const cancel = async () => {
@@ -104,7 +165,12 @@ export default function VoiceRecordButton({ onResult, disabled }) {
           </>
         )}
 
-        <TouchableOpacity onPress={isRecording ? stopAndSend : start} disabled={disabled || isProcessing} activeOpacity={0.85} style={styles.btnTouch}>
+        <TouchableOpacity
+          onPress={isRecording ? stopAndSend : start}
+          disabled={disabled || isProcessing}
+          activeOpacity={0.85}
+          style={styles.btnTouch}
+        >
           <Animated.View style={{ transform: [{ scale: btnScale }] }}>
             <LinearGradient
               colors={gradients.accent}
@@ -128,6 +194,13 @@ export default function VoiceRecordButton({ onResult, disabled }) {
         </Text>
       )}
       {isRecording && <Text style={styles.hintText}>Клик мимо — отмена</Text>}
+
+      <SuggestCategoryModal
+        visible={suggest.visible}
+        suggestedName={suggest.suggestedName}
+        onConfirm={handleCreateCategory}
+        onSkip={handleSkip}
+      />
     </View>
   );
 }
@@ -135,9 +208,9 @@ export default function VoiceRecordButton({ onResult, disabled }) {
 const styles = StyleSheet.create({
   wrapper: { alignItems: 'center', gap: 8 },
   cancelOverlay: { position: 'absolute', top: -2000, bottom: -2000, left: -2000, right: -2000, zIndex: 10 },
-  ringZone: { width: 100, height: 100, justifyContent: 'center', alignItems: 'center' },
+  ringZone: { width: 100, height: 100, justifyContent: 'center', alignItems: 'center', position: 'relative', zIndex: 15 },
   ring: { position: 'absolute', width: 64, height: 64, borderRadius: 32, borderWidth: 2, borderColor: colors.lavender },
-  btnTouch: { zIndex: 20 },
+  btnTouch: { zIndex: 20, position: 'relative' },
   micButton: { width: 64, height: 64, borderRadius: 32, justifyContent: 'center', alignItems: 'center' },
   timerText: { fontFamily: 'Ubuntu_500Medium', fontSize: 13, color: colors.textSecondary, marginTop: 4 },
   hintText: { fontFamily: 'Ubuntu_400Regular', fontSize: 11, color: colors.terracotta, marginTop: -4 },
