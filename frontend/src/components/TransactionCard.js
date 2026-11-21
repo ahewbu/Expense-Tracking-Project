@@ -5,16 +5,25 @@ import { capitalizeFirst } from '../utils/text';
 import { getCategoryIcon, getCategoryColor } from '../theme/icons';
 import { colors, radii } from '../theme/theme';
 
-export default function TransactionCard({ description, categoryName, date, amount, status, isReadyToConfirm }) {
-  // ВСЕГДА берём иконку из маппинга, игнорируем emoji из БД
-  const iconName = getCategoryIcon(categoryName);
-  const color = getCategoryColor(categoryName);
+export default function TransactionCard({ 
+  description, 
+  categoryName, 
+  date, 
+  amount, 
+  status, 
+  isReadyToConfirm,
+  icon,      // НОВОЕ: иконка из БД
+  color,     // НОВОЕ: цвет из БД
+}) {
+  // Используем иконку и цвет из БД, если есть, иначе берем из маппинга
+  const iconName = icon || getCategoryIcon(categoryName);
+  const iconColor = color || getCategoryColor(categoryName);
   const isPending = status === 'pending';
 
   return (
     <View style={[styles.card, isReadyToConfirm && styles.readyCard]}>
-      <View style={[styles.iconWrap, { backgroundColor: color + '22' }]}>
-        <Ionicons name={iconName} size={20} color={color} />
+      <View style={[styles.iconWrap, { backgroundColor: iconColor + '22' }]}>
+        <Ionicons name={iconName} size={20} color={iconColor} />
       </View>
 
       <View style={styles.info}>

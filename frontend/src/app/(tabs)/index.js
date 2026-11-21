@@ -168,6 +168,8 @@ export default function HomeScreen() {
                   amount={item.amount}
                   status={item.status}
                   isReadyToConfirm={pendingConfirmId === item.id}
+                  icon={item.category_icon}      // ДОБАВИТЬ
+                  color={item.category_color}    // ДОБАВИТЬ
                 />
               </TouchableOpacity>
             ))

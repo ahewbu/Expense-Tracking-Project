@@ -44,7 +44,16 @@ api.interceptors.response.use(
     }
 
     if (!error.response) {
-      showToast('error', 'Нет подключения к интернету. Проверьте сеть.');
+      const isTimeout =
+        error.code === 'ECONNABORTED' || 
+        /timeout/i.test(error.message || '') ||
+        error.message?.includes('90000');
+      
+      if (isTimeout) {
+        showToast('error', 'Сервер слишком долго не отвечает. Попробуйте ещё раз.');
+      } else {
+        showToast('error', 'Нет подключения к интернету. Проверьте сеть.');
+      }
     }
 
     return Promise.reject(error);
@@ -74,7 +83,11 @@ export const updateTransaction = async (id, data) => {
 };
 
 export const createCategory = async (data) => {
-  const response = await api.post('/api/v1/transactions/categories/', data);
+  const response = await api.post('/api/v1/transactions/categories/', {
+    name: data.name,
+    icon: data.icon || 'cube-outline',
+    color: data.color || '#9CA3AF',
+  });
   return response.data;
 };
 
@@ -109,7 +122,7 @@ export const sendVoiceTransaction = async (uri) => {
   formData.append('file', file);
 
   const response = await api.post('/api/v1/transactions/voice', formData, {
-    timeout: 90000,
+    timeout: 120000,
   });
   return response.data;
 };

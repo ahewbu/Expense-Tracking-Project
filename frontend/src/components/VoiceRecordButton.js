@@ -7,6 +7,7 @@ import {
   sendVoiceTransaction,
   createCategory,
   updateTransaction,
+  getCategories,
   normalizeTransactionResult,
 } from '../api/transactions';
 import { showToast } from '../utils/toast';
@@ -20,6 +21,7 @@ export default function VoiceRecordButton({ onResult, disabled }) {
   const [duration, setDuration] = useState(0);
 
   const [suggest, setSuggest] = useState({ visible: false, suggestedName: '', transactionId: null });
+  const [suggestCategories, setSuggestCategories] = useState([]);
 
   const ring1 = useRef(new Animated.Value(1)).current;
   const ring2 = useRef(new Animated.Value(1)).current;
@@ -63,6 +65,7 @@ export default function VoiceRecordButton({ onResult, disabled }) {
     `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
 
   const start = async () => {
+    setDuration(0);
     try {
       const { status } = await requestRecordingPermissionsAsync();
       if (status !== 'granted') {
@@ -98,12 +101,25 @@ export default function VoiceRecordButton({ onResult, disabled }) {
       }
 
       // ИИ предложил новую категорию
+      // ИИ предложил новую категорию
       if (categoryMatch === 'suggested' && suggestedNewCategory) {
         setSuggest({
           visible: true,
           suggestedName: suggestedNewCategory,
           transactionId: transaction.id,
         });
+        // Загружаем категории с сортировкой: по алфавиту, «Прочее» — в конце
+        try {
+          const cats = await getCategories();
+          const sorted = (cats || []).sort((a, b) => {
+            if (a.name === 'Прочее') return 1;
+            if (b.name === 'Прочее') return -1;
+            return a.name.localeCompare(b.name, 'ru');
+          });
+          setSuggestCategories(sorted);
+        } catch (e) {
+          setSuggestCategories([]);
+        }
         return;
       }
 
@@ -111,31 +127,47 @@ export default function VoiceRecordButton({ onResult, disabled }) {
       onResult?.(transaction);
     } catch (e) {
       console.error('❌ Ошибка голосового ввода:', e);
+      // Если это таймаут или сетевая ошибка — интерцептор уже показал тост
       if (!e.response) {
-        showToast('error', 'Не удалось распознать речь. Попробуйте ещё раз.');
+        const isTimeout =
+          e.code === 'ECONNABORTED' ||
+          /timeout/i.test(e.message || '') ||
+          e.message?.includes('90000');
+        if (!isTimeout) {
+          // Только реальная сетевая ошибка (не таймаут) — показываем свой тост
+          showToast('error', 'Не удалось распознать речь. Попробуйте ещё раз.');
+        }
+        return;
       }
+      // Настоящая ошибка сервера (4xx/5xx)
+      showToast('error', e.response?.data?.detail || 'Не удалось распознать речь');
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const handleCreateCategory = async (name) => {
+  const handleCreateCategory = async (name, icon, color) => {
     try {
-      const newCat = await createCategory({ name });
+      const newCat = await createCategory({ name, icon, color });
       await updateTransaction(suggest.transactionId, { category_id: newCat.id });
       setSuggest({ visible: false, suggestedName: '', transactionId: null });
-      // Тост убран — пользователь сам видит результат
       onResult?.(newCat);
     } catch (e) {
-      console.error('Ошибка создания категории:', e);
-      if (e.response?.status === 400) {
-        const detail = e.response.data?.detail || '';
-        if (detail.includes('уже существует')) {
-          showToast('warning', 'Такая категория уже есть — введите другое имя');
-        } else {
-          showToast('error', detail || 'Не удалось создать категорию');
-        }
-      }
+      const detail = e.response?.data?.detail || '';
+      if (detail.includes('уже существует')) throw new Error('Такая категория уже есть');
+      if (!e.response) throw new Error('Нет связи с сервером');
+      throw new Error(detail || 'Не удалось создать категорию');
+    }
+  };
+
+  const handleLinkCategory = async (cat) => {
+    try {
+      await updateTransaction(suggest.transactionId, { category_id: cat.id });
+      setSuggest({ visible: false, suggestedName: '', transactionId: null });
+      onResult?.(cat);
+    } catch (e) {
+      if (!e.response) throw new Error('Нет связи с сервером');
+      throw new Error('Не удалось привязать категорию');
     }
   };
 
@@ -198,7 +230,9 @@ export default function VoiceRecordButton({ onResult, disabled }) {
       <SuggestCategoryModal
         visible={suggest.visible}
         suggestedName={suggest.suggestedName}
+        categories={suggestCategories}
         onConfirm={handleCreateCategory}
+        onLink={handleLinkCategory}
         onSkip={handleSkip}
       />
     </View>
