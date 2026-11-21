@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
@@ -10,30 +12,44 @@ from app.core.rate_limiter import limiter, rate_limit_exceeded_handler
 
 app = FastAPI(
     title="Геленджик 2007 API",
-    version="0.2.0",
+    version="0.3.0",
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json"
 )
 
-# CORS middleware для фронтенда
+# === CORS: условная настройка в зависимости от окружения ===
+ENV = os.getenv("ENV", "development")
+
+if ENV == "production":
+    # Продакшен: только конкретные домены
+    ALLOWED_ORIGINS = [
+        "https://expense-tracking-project-production.up.railway.app",
+        # Когда задеплоишь фронт на Expo web / Vercel / Netlify — добавь его домен сюда:
+        # "https://твой-фронт.vercel.app",
+    ]
+else:
+    # Разработка: разрешаем всё (для Swagger UI и локального фронта)
+    ALLOWED_ORIGINS = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Для разработки разрешаем все источники
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],  # Разрешаем GET, POST, PATCH и т.д.
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Подключаем rate limiter
+# === Rate limiter ===
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
-# Подключаем роутеры
+# === Роутеры ===
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(transactions_router, prefix="/api/v1")
 app.include_router(stats_router, prefix="/api/v1")
-app.include_router(insights_router, prefix="/api/v1")  # ✅ С ПРЕФИКСОМ
+app.include_router(insights_router, prefix="/api/v1")
+
 
 @app.get("/health")
 def health():
