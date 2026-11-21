@@ -10,6 +10,8 @@ from app.api.v1.stats import router as stats_router
 from app.api.v1.insights import router as insights_router
 from app.core.rate_limiter import limiter, rate_limit_exceeded_handler
 
+   # Тест автодеплоя Railway
+
 app = FastAPI(
     title="Геленджик 2007 API",
     version="0.3.0",
